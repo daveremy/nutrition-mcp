@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "nutrition-mcp": {
+      "command": "node",
+      "args": ["--import", "tsx", "src/mcp.ts"],
+      "env": {}
+    }
+  }
+}

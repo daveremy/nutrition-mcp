@@ -1,0 +1,9 @@
+{
+  "name": "nutrition-mcp",
+  "version": "0.1.0",
+  "description": "Nutrition lookup MCP server — search 326K+ foods, USDA API fallback, barcode scanning",
+  "mcp": {
+    "command": "npx",
+    "args": ["-y", "nutrition-mcp"]
+  }
+}

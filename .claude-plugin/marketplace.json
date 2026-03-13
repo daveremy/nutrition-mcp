@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "plugins": [
+    {
+      "name": "nutrition-mcp",
+      "description": "Nutrition lookup — search 326K+ foods with macros, USDA API fallback, barcode scanning, and local caching",
+      "publisher": "nutrition-mcp",
+      "repository": "https://github.com/daveremy/nutrition-mcp",
+      "tags": ["nutrition", "food", "calories", "macros", "usda"],
+      "install": {
+        "command": "npx",
+        "args": ["-y", "nutrition-mcp"]
+      }
+    }
+  ]
+}

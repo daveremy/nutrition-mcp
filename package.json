@@ -1,0 +1,38 @@
+{
+  "name": "nutrition-mcp",
+  "version": "0.1.0",
+  "description": "3-tier nutrition lookup MCP server with local SQLite caching",
+  "type": "module",
+  "main": "dist/mcp.js",
+  "bin": {
+    "nutrition-mcp": "dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "prepack": "npm run build",
+    "dev": "tsx src/mcp.ts",
+    "test": "node --import tsx --test test/*.test.ts",
+    "seed": "tsx scripts/seed-db.ts"
+  },
+  "files": [
+    "dist/",
+    ".claude-plugin/",
+    "skills/"
+  ],
+  "keywords": ["mcp", "nutrition", "food", "usda", "calories"],
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.27.1",
+    "better-sqlite3": "^12.6.2",
+    "commander": "^14.0.3",
+    "yauzl": "^3.2.0",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^25.5.0",
+    "@types/yauzl": "^2.10.3",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3"
+  }
+}
