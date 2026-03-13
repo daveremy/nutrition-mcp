@@ -12,7 +12,8 @@
     "prepack": "npm run build",
     "dev": "tsx src/mcp.ts",
     "test": "node --import tsx --test test/*.test.ts",
-    "seed": "tsx scripts/seed-db.ts"
+    "seed": "tsx scripts/seed-db.ts",
+    "release": "./scripts/release.sh"
   },
   "files": [
     "dist/",
