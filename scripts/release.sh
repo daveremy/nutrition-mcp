@@ -14,6 +14,7 @@ set -euo pipefail
 #   7. Git tag
 #   8. Publish to npm
 #   9. Push to GitHub (only after successful publish)
+#  10. Update aggregated marketplace (daveremy/claude-plugins)
 
 BUMP="${1:-patch}"
 
@@ -87,9 +88,39 @@ echo "Pushing to GitHub..."
 git push origin main
 git push origin "v$NEW_VERSION"
 
+# 10. Update aggregated marketplace
+MARKETPLACE_DIR="$HOME/code/claude-plugins"
+MARKETPLACE_FILE="$MARKETPLACE_DIR/.claude-plugin/marketplace.json"
+PLUGIN_NAME="nutrition-mcp"
+
+if [[ -d "$MARKETPLACE_DIR" ]]; then
+  echo "Updating aggregated marketplace..."
+  (
+    cd "$MARKETPLACE_DIR"
+    git pull --rebase origin main
+    node -e "
+const fs = require('fs');
+const f = '$MARKETPLACE_FILE';
+const m = JSON.parse(fs.readFileSync(f, 'utf8'));
+const plugin = m.plugins.find(p => p.name === '$PLUGIN_NAME');
+if (plugin) {
+  plugin.version = '$NEW_VERSION';
+  fs.writeFileSync(f, JSON.stringify(m, null, 2) + '\n');
+} else {
+  console.error('Warning: $PLUGIN_NAME not found in marketplace.json');
+  process.exit(1);
+}
+"
+    git add .claude-plugin/marketplace.json
+    git commit -m "Bump $PLUGIN_NAME to v$NEW_VERSION"
+    git push origin main
+  )
+  echo "Marketplace updated."
+else
+  echo "Warning: $MARKETPLACE_DIR not found — update marketplace manually."
+fi
+
 echo ""
 echo "Released nutrition-mcp@$NEW_VERSION"
 echo "  npm: https://www.npmjs.com/package/nutrition-mcp"
 echo "  tag: https://github.com/daveremy/nutrition-mcp/releases/tag/v$NEW_VERSION"
-echo ""
-echo "TODO: Update version in daveremy/claude-plugins marketplace.json"
