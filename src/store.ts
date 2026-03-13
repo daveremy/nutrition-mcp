@@ -67,22 +67,20 @@ export class NutritionStore {
 
   constructor(dbPath?: string) {
     this.dbPath = dbPath ?? getDbPath();
-    this.db = new Database(this.dbPath);
-    this.db.pragma("journal_mode = WAL");
-    this.db.pragma("foreign_keys = ON");
-    this.init();
+    this.db = this.openDatabase();
   }
 
   reopen(): void {
     try { this.db.close(); } catch {}
-    this.db = new Database(this.dbPath);
-    this.db.pragma("journal_mode = WAL");
-    this.db.pragma("foreign_keys = ON");
-    this.init();
+    this.db = this.openDatabase();
   }
 
-  private init(): void {
-    this.db.exec(SCHEMA_SQL);
+  private openDatabase(): Database.Database {
+    const db = new Database(this.dbPath);
+    db.pragma("journal_mode = WAL");
+    db.pragma("foreign_keys = ON");
+    db.exec(SCHEMA_SQL);
+    return db;
   }
 
   search(query: string, limit: number = 10): SearchResult[] {
@@ -212,7 +210,10 @@ export class NutritionStore {
     }
     const stmt = this.db.prepare("DELETE FROM foods WHERE id = ?");
     const result = stmt.run(id);
-    return { deleted: result.changes > 0 };
+    if (result.changes === 0) {
+      return { deleted: false, reason: "Food not found" };
+    }
+    return { deleted: true };
   }
 
   override(
