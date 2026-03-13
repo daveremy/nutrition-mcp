@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.0
+
+- Auto-seed database on first run (no manual `build-db` step required)
+- Store `reopen()` method for seamless post-seed reconnection
+- Attribution for mcp-opennutrition inspiration and OpenNutrition dataset
+
 ## 0.1.0
 
 - Initial release

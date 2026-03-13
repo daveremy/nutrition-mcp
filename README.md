@@ -9,17 +9,19 @@ npm install
 npm run build
 ```
 
-### Seed the database
+### Database
 
-Download and import the OpenNutrition dataset (~326K foods):
+The database is automatically seeded on first run — no manual step required. The first startup downloads and imports the OpenNutrition dataset (~326K foods), which takes a few minutes. Subsequent starts are instant.
+
+The database is stored at `~/.nutrition-mcp/nutrition.db`.
+
+To manually rebuild (e.g. after a dataset update):
 
 ```bash
-npm run seed
+npx nutrition-mcp build-db
 ```
 
-The database is stored at `~/.nutrition-mcp/nutrition.db`. This step is required for tier 1 (local) search. Without it, only tier 2 (USDA API) results are available.
-
-Rebuilding the database preserves any previously cached USDA and web results.
+Rebuilding preserves any previously cached USDA and web results.
 
 ### USDA API key (optional)
 
@@ -192,6 +194,10 @@ npm test             # Run tests (node:test + tsx)
 npm run build        # Compile TypeScript
 npm run seed         # Seed/rebuild database
 ```
+
+## Acknowledgments
+
+Inspired by [mcp-opennutrition](https://github.com/deadletterq/mcp-opennutrition) by deadletterq. This project uses the [OpenNutrition dataset](https://www.opennutrition.app/) which combines data from USDA, CNF, FRIDA, and AUSNUT sources, licensed under ODbL 1.0.
 
 ## License
 

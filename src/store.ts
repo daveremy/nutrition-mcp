@@ -63,9 +63,19 @@ CREATE INDEX IF NOT EXISTS idx_foods_source_tier ON foods(source_tier);
 
 export class NutritionStore {
   db: Database.Database;
+  private dbPath: string;
 
   constructor(dbPath?: string) {
-    this.db = new Database(dbPath ?? getDbPath());
+    this.dbPath = dbPath ?? getDbPath();
+    this.db = new Database(this.dbPath);
+    this.db.pragma("journal_mode = WAL");
+    this.db.pragma("foreign_keys = ON");
+    this.init();
+  }
+
+  reopen(): void {
+    try { this.db.close(); } catch {}
+    this.db = new Database(this.dbPath);
     this.db.pragma("journal_mode = WAL");
     this.db.pragma("foreign_keys = ON");
     this.init();

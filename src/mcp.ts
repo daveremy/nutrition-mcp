@@ -202,6 +202,22 @@ server.tool(
 );
 
 export async function startServer(): Promise<void> {
+  // Auto-seed on first run if no local foods exist
+  const stats = store.getStats();
+  if (!stats.by_tier.local) {
+    console.error("[nutrition-mcp] No local database found. Seeding (this may take a few minutes on first run)...");
+    try {
+      const { seedDatabase } = await import("./seed.js");
+      await seedDatabase();
+      // Reopen store to pick up the newly seeded database
+      store.reopen();
+      console.error("[nutrition-mcp] Database seeded successfully.");
+    } catch (err) {
+      console.error("[nutrition-mcp] Auto-seed failed. Server will start without local data:", err);
+      console.error("[nutrition-mcp] Run 'npx nutrition-mcp build-db' manually to seed.");
+    }
+  }
+
   const transport = new StdioServerTransport();
   await server.connect(transport);
 }
