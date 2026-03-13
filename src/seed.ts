@@ -9,7 +9,7 @@ import Database from "better-sqlite3";
 import { getDbDir, getDbPath, normalizeBarcode } from "./utils.js";
 
 const DATASET_URL =
-  "https://github.com/nicholasgasior/open-nutrition-database/releases/download/v2.0.0/en.openfoodfacts.org.products.tsv.zip";
+  "https://github.com/daveremy/nutrition-mcp/releases/download/dataset-v2025.1/opennutrition-dataset-2025.1.zip";
 
 // Schema without FTS triggers (faster bulk import)
 const SCHEMA_SQL = `
@@ -74,49 +74,62 @@ interface TsvRow {
   [key: string]: string;
 }
 
-function parseNumber(val: string | undefined): number | null {
-  if (!val || val === "" || val === "NA") return null;
-  const n = parseFloat(val);
-  return isNaN(n) ? null : n;
+function safeJsonParse(val: string | undefined): any {
+  if (!val || val === "") return null;
+  try { return JSON.parse(val); } catch { return null; }
 }
 
-function mapTsvRow(row: TsvRow, index: number) {
-  const name = row["product_name"]?.trim();
+function mapTsvRow(row: TsvRow) {
+  const name = row["name"]?.trim();
   if (!name) return null;
 
-  const sourceId = row["code"] || `row_${index}`;
-  const barcode = row["code"] ? normalizeBarcode(row["code"]) : null;
+  const sourceId = row["id"] || null;
+  if (!sourceId) return null;
 
-  // Build alternate names text from various name columns
-  const altNames: string[] = [];
-  if (row["generic_name"]) altNames.push(row["generic_name"]);
-  if (row["abbreviated_product_name"]) altNames.push(row["abbreviated_product_name"]);
+  const barcode = row["ean_13"] ? normalizeBarcode(row["ean_13"]) : null;
+
+  // Parse nutrition_100g JSON
+  const nutrition = safeJsonParse(row["nutrition_100g"]);
+
+  // Parse alternate_names JSON array to space-separated text
+  const altNamesArr = safeJsonParse(row["alternate_names"]);
+  const altNamesText = Array.isArray(altNamesArr) && altNamesArr.length > 0
+    ? altNamesArr.join(" ")
+    : null;
+
+  // Parse serving JSON for serving size
+  const serving = safeJsonParse(row["serving"]);
+  let servingSize: string | null = null;
+  let servingWeightG: number | null = null;
+  if (serving?.common) {
+    servingSize = `${serving.common.quantity} ${serving.common.unit}`;
+    if (serving.metric?.unit === "g") {
+      servingWeightG = serving.metric.quantity ?? null;
+    }
+  }
 
   return {
     id: `on_${sourceId}`,
     name,
-    brand: row["brands"]?.trim() || null,
-    type: "everyday",
+    brand: null,
+    type: row["type"]?.trim() || "everyday",
     ean_13: barcode,
     source_tier: "local",
     source_id: sourceId,
     source_query: null,
-    calories: parseNumber(row["energy-kcal_100g"]),
-    protein: parseNumber(row["proteins_100g"]),
-    fat: parseNumber(row["fat_100g"]),
-    carbs: parseNumber(row["carbohydrates_100g"]),
-    fiber: parseNumber(row["fiber_100g"]),
-    sugar: parseNumber(row["sugars_100g"]),
-    sodium: (() => {
-      const s = parseNumber(row["sodium_100g"]);
-      return s !== null ? s * 1000 : null; // convert g to mg
-    })(),
-    serving_size: row["serving_size"]?.trim() || null,
-    serving_weight_g: parseNumber(row["serving_quantity"]),
-    alternate_names_text: altNames.length > 0 ? altNames.join(" ") : null,
-    labels: row["labels"] ? JSON.stringify(row["labels"].split(",").map((l: string) => l.trim())) : null,
-    ingredients: row["ingredients_text"]?.trim() || null,
-    data_source: JSON.stringify({ source: "open_nutrition", code: row["code"] }),
+    calories: nutrition?.calories ?? null,
+    protein: nutrition?.protein ?? null,
+    fat: nutrition?.total_fat ?? null,
+    carbs: nutrition?.carbohydrates ?? null,
+    fiber: nutrition?.dietary_fiber ?? null,
+    sugar: nutrition?.total_sugars ?? null,
+    sodium: nutrition?.sodium ?? null, // already in mg
+    serving_size: servingSize,
+    serving_weight_g: servingWeightG,
+    alternate_names_text: altNamesText,
+    labels: row["labels"] ? row["labels"] : null, // already JSON array string
+    ingredients: row["ingredients"]?.trim() || null,
+    data_source: JSON.stringify({ source: "open_nutrition", id: sourceId }),
   };
 }
 
@@ -213,7 +226,7 @@ export async function seedDatabase(): Promise<void> {
 
   const insertBatch = db.transaction((rows: TsvRow[]) => {
     for (let i = 0; i < rows.length; i++) {
-      const mapped = mapTsvRow(rows[i], lineNum - rows.length + i);
+      const mapped = mapTsvRow(rows[i]);
       if (!mapped) continue;
       try {
         stmt.run(mapped);
