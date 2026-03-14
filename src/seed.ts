@@ -307,9 +307,15 @@ export async function seedDatabase(): Promise<void> {
 
   db.close();
 
-  // Replace existing DB (remove first for Windows compatibility)
+  // Replace existing DB — also remove stale WAL/SHM files from the old DB.
+  // If the NutritionStore has the old DB open with WAL mode, those journal files
+  // linger after unlink. SQLite would replay them on the new DB, making it appear empty.
   if (fs.existsSync(dbPath)) {
     fs.unlinkSync(dbPath);
+  }
+  for (const suffix of ["-wal", "-shm"]) {
+    try { fs.unlinkSync(dbPath + suffix); } catch {}
+    try { fs.unlinkSync(tmpDbPath + suffix); } catch {}
   }
   fs.renameSync(tmpDbPath, dbPath);
   setSeedInserted(inserted);
