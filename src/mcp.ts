@@ -245,6 +245,29 @@ server.tool(
 );
 
 server.tool(
+  "nutrition_cache_list",
+  "List cached food entries (USDA and web-sourced). Shows what has been cached from API lookups, web searches, and manual additions. Does not include the local OpenNutrition dataset.",
+  {
+    tier: z.enum(["usda", "web", "all"]).default("all").describe("Filter by source tier"),
+    limit: z.number().min(1).max(100).default(20).describe("Page size"),
+    offset: z.number().min(0).default(0).describe("Pagination offset"),
+  },
+  async ({ tier, limit, offset }) => {
+    const results = store.listCached(tier, limit, offset);
+    if (results.length === 0) {
+      return {
+        content: [{ type: "text" as const, text: "No cached entries found." }],
+      };
+    }
+    return {
+      content: [
+        { type: "text" as const, text: JSON.stringify(results, null, 2) },
+      ],
+    };
+  }
+);
+
+server.tool(
   "nutrition_cache_stats",
   "Get statistics about the local nutrition cache: total foods, breakdown by source tier, last cached timestamp, and seed status.",
   {},

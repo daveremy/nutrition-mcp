@@ -115,6 +115,18 @@ Add or update a food item in the local cache. Useful for saving nutrition data f
 | `serving_weight_g` | number | no | Serving weight in grams |
 | `ean_13` | string | no | EAN-13 barcode |
 
+#### `nutrition_cache_list`
+
+List cached food entries (USDA and web-sourced). Does not include the local OpenNutrition dataset.
+
+| Param | Type | Default | Description |
+|-------|------|---------|-------------|
+| `tier` | string | `all` | Filter: `usda`, `web`, or `all` |
+| `limit` | number | 20 | Page size (1-100) |
+| `offset` | number | 0 | Pagination offset |
+
+Returns an array of `{ id, name, brand, calories, protein, fat, carbs, serving_size, source_tier }` ordered by most recently updated.
+
 #### `nutrition_cache_delete`
 
 Delete a cached food entry by ID. Refuses to delete local dataset entries (`on_` prefix) — use `build-db` to manage those.

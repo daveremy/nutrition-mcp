@@ -203,6 +203,21 @@ export class NutritionStore {
     return { total, by_tier, last_cached_at: lastCached };
   }
 
+  listCached(tier: "usda" | "web" | "all" = "all", limit: number = 20, offset: number = 0): SearchResult[] {
+    const where = tier === "all"
+      ? "WHERE source_tier IN ('usda', 'web')"
+      : "WHERE source_tier = ?";
+    const stmt = this.db.prepare(`
+      SELECT id, name, brand, calories, protein, fat, carbs, serving_size, source_tier
+      FROM foods
+      ${where}
+      ORDER BY updated_at DESC
+      LIMIT ? OFFSET ?
+    `);
+    const params = tier === "all" ? [limit, offset] : [tier, limit, offset];
+    return stmt.all(...params) as SearchResult[];
+  }
+
   delete(id: string): { deleted: boolean; reason?: string } {
     // Refuse to delete local (OpenNutrition) entries — build-db is the authority
     if (id.startsWith("on_")) {
