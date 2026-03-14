@@ -1,5 +1,5 @@
 import type { FoodItem, UsdaFoodResult } from "./types.js";
-import { normalizeBarcode } from "./utils.js";
+import { log, normalizeBarcode } from "./utils.js";
 
 const USDA_BASE = "https://api.nal.usda.gov/fdc/v1";
 
@@ -71,12 +71,12 @@ async function fetchUsdaSearch(
   const res = await fetch(url.toString());
 
   if (res.status === 429) {
-    console.error("[nutrition-mcp] USDA API rate limited");
+    log("USDA API rate limited");
     return [];
   }
 
   if (!res.ok) {
-    console.error(`[nutrition-mcp] USDA API error: ${res.status}`);
+    log(`USDA API error: ${res.status}`);
     return [];
   }
 
@@ -95,7 +95,7 @@ export async function searchUsda(
     const foods = await fetchUsdaSearch(query, limit, apiKey);
     return foods.map((f) => mapUsdaToFood(f, query));
   } catch (err) {
-    console.error("[nutrition-mcp] USDA API network error:", err);
+    log("USDA API network error:", err);
     return [];
   }
 }
@@ -137,7 +137,7 @@ export async function lookupBarcodeUsda(
 
     return null;
   } catch (err) {
-    console.error("[nutrition-mcp] USDA API network error:", err);
+    log("USDA API network error:", err);
     return null;
   }
 }

@@ -6,11 +6,7 @@ import { pipeline } from "node:stream/promises";
 
 import Database from "better-sqlite3";
 
-import { getDbDir, getDbPath, normalizeBarcode } from "./utils.js";
-
-function log(msg: string): void {
-  console.error(`[nutrition-mcp] ${msg}`);
-}
+import { getDbDir, getDbPath, log, normalizeBarcode } from "./utils.js";
 
 const DATASET_URL =
   "https://github.com/daveremy/nutrition-mcp/releases/download/dataset-v2025.1/opennutrition-dataset-2025.1.zip";
@@ -228,12 +224,10 @@ export async function seedDatabase(): Promise<void> {
   let lineNum = 0;
   let inserted = 0;
 
-  const insertBatch = db.transaction((rows: TsvRow[]) => {
-    for (let i = 0; i < rows.length; i++) {
-      const mapped = mapTsvRow(rows[i]);
-      if (!mapped) continue;
+  const insertBatch = db.transaction((mapped: NonNullable<ReturnType<typeof mapTsvRow>>[]) => {
+    for (let i = 0; i < mapped.length; i++) {
       try {
-        stmt.run(mapped);
+        stmt.run(mapped[i]);
         inserted++;
       } catch {
         // Skip rows that fail (e.g. duplicate IDs)
@@ -263,7 +257,9 @@ export async function seedDatabase(): Promise<void> {
     lineNum++;
 
     if (batch.length >= BATCH_SIZE) {
-      insertBatch(batch);
+      // Map outside the transaction to avoid JSON parsing under the write lock
+      const mapped = batch.map(mapTsvRow).filter((r): r is NonNullable<typeof r> => r !== null);
+      insertBatch(mapped);
       batch = [];
       if (inserted % 50000 < BATCH_SIZE) {
         log(`  ${inserted.toLocaleString()} foods imported...`);
@@ -273,18 +269,14 @@ export async function seedDatabase(): Promise<void> {
 
   // Insert remaining rows
   if (batch.length > 0) {
-    insertBatch(batch);
+    const mapped = batch.map(mapTsvRow).filter((r): r is NonNullable<typeof r> => r !== null);
+    insertBatch(mapped);
   }
 
-  if (headers.length === 0) throw new Error("Empty TSV file");
+  if (lineNum <= 1) throw new Error("Empty TSV file");
   log(`Imported ${inserted.toLocaleString()} foods`);
 
-  // Create FTS and rebuild index
-  log("Building search index...");
-  db.exec(FTS_SCHEMA);
-  db.exec("INSERT INTO foods_fts(foods_fts) VALUES ('rebuild')");
-
-  // Preserve cached data from existing DB
+  // Preserve cached data from existing DB before building FTS index
   if (fs.existsSync(dbPath)) {
     log("Preserving cached USDA/web data...");
     try {
@@ -297,9 +289,14 @@ export async function seedDatabase(): Promise<void> {
       db.exec("DETACH DATABASE old_db");
       log("Cached data preserved");
     } catch (err) {
-      console.error("Warning: could not preserve cached data:", err);
+      log("Warning: could not preserve cached data:", err);
     }
   }
+
+  // Create FTS and rebuild index (after all data including cached entries)
+  log("Building search index...");
+  db.exec(FTS_SCHEMA);
+  db.exec("INSERT INTO foods_fts(foods_fts) VALUES ('rebuild')");
 
   db.close();
 

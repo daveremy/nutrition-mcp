@@ -12,6 +12,14 @@ export function getDbPath(): string {
   return path.join(getDbDir(), "nutrition.db");
 }
 
+export function log(msg: string, err?: unknown): void {
+  if (err !== undefined) {
+    console.error(`[nutrition-mcp] ${msg}`, err);
+  } else {
+    console.error(`[nutrition-mcp] ${msg}`);
+  }
+}
+
 /**
  * Normalize a barcode to 13-digit EAN-13.
  * If 12 digits (UPC-A), zero-pad to 13.

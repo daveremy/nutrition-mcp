@@ -8,7 +8,7 @@ import { z } from "zod";
 
 import { NutritionStore } from "./store.js";
 import { SearchOrchestrator } from "./search.js";
-import { normalizeBarcode } from "./utils.js";
+import { log, normalizeBarcode } from "./utils.js";
 import { VERSION } from "./version.js";
 
 const store = new NutritionStore();
@@ -211,8 +211,8 @@ server.tool(
 
 export async function startServer(): Promise<void> {
   if (!process.env.USDA_API_KEY) {
-    console.error("[nutrition-mcp] Warning: USDA_API_KEY not set. Only local database will be searched.");
-    console.error("[nutrition-mcp] Get a free key at https://fdc.nal.usda.gov/api-key-signup");
+    log("Warning: USDA_API_KEY not set. Only local database will be searched.");
+    log("Get a free key at https://fdc.nal.usda.gov/api-key-signup");
   }
 
   // Connect transport immediately — never block on seeding
@@ -222,20 +222,20 @@ export async function startServer(): Promise<void> {
   // Auto-seed in background on first run if no local foods exist
   const stats = store.getStats();
   if (!stats.by_tier.local) {
-    console.error("[nutrition-mcp] No local database found. Seeding in background (this may take a few minutes)...");
-    console.error("[nutrition-mcp] Tools will work without local data until seeding completes.");
+    log("No local database found. Seeding in background (this may take a few minutes)...");
+    log("Tools will work without local data until seeding completes.");
     seeding = true;
     import("./seed.js")
       .then(({ seedDatabase }) => seedDatabase())
       .then(() => {
         store.reopen();
         seeding = false;
-        console.error("[nutrition-mcp] Database seeded successfully. Local search is now available.");
+        log("Database seeded successfully. Local search is now available.");
       })
       .catch((err) => {
         seeding = false;
-        console.error("[nutrition-mcp] Auto-seed failed:", err);
-        console.error("[nutrition-mcp] Run 'npx nutrition-mcp build-db' manually to seed.");
+        log("Auto-seed failed:", err);
+        log("Run 'npx nutrition-mcp build-db' manually to seed.");
       });
   }
 }
