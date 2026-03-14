@@ -221,6 +221,11 @@ export async function startServer(): Promise<void> {
     }
   }
 
+  if (!process.env.USDA_API_KEY) {
+    console.error("[nutrition-mcp] Warning: USDA_API_KEY not set. Only local database will be searched.");
+    console.error("[nutrition-mcp] Get a free key at https://fdc.nal.usda.gov/api-key-signup");
+  }
+
   const transport = new StdioServerTransport();
   await server.connect(transport);
 }

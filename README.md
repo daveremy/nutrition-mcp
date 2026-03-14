@@ -23,15 +23,15 @@ npx nutrition-mcp build-db
 
 Rebuilding preserves any previously cached USDA and web results.
 
-### USDA API key (optional)
+### USDA API Key (recommended)
 
-For tier 2 fallback searches, set a free [USDA FoodData Central](https://fdc.nal.usda.gov/api-key-signup) API key:
+A free [USDA FoodData Central](https://fdc.nal.usda.gov/api-key-signup) API key is strongly recommended. Without it, searches are limited to the local OpenNutrition dataset and many branded/packaged foods won't be found.
 
 ```bash
 export USDA_API_KEY=your_key_here
 ```
 
-Without this, only the local database is searched.
+With [direnv](https://direnv.net/), add it to your project's `.env` file so it's automatically available.
 
 ## MCP Server
 
