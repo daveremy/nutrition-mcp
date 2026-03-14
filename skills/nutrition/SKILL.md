@@ -24,11 +24,17 @@ Analyze nutritional content of foods using the nutrition-mcp tools.
 
 5. **If the user wants details** on a specific result, look up the full record by ID.
 
-6. **If nothing is found**:
+6. **If results are missing, incomplete, or a poor match** (e.g. no results, only generic matches for a specific branded product, or the food is region-specific / niche):
    - Call `nutrition_cache_stats` to check seed and USDA key status.
    - If `seed.phase` is `"idle"` and local foods count is 0: call `nutrition_seed` to start seeding, then tell the user the database is being populated and to try again in a few minutes.
    - If seeding is in progress: show the progress percentage and suggest waiting.
-   - If seeding is done and local data exists: suggest trying alternate search terms, checking `USDA_API_KEY`, or searching the web manually and caching with `nutrition_cache_add`.
+   - If seeding is done and local data exists: **search the web** for the food's official nutrition information (manufacturer's website, product page, or a reputable nutrition database). Then cache the verified data using `nutrition_cache_add` with the source URL. This ensures the user gets accurate, up-to-date nutrition data rather than estimates.
+
+7. **IMPORTANT — never guess nutrition values from training data.** Nutrition information must come from one of these sources:
+   - The local database or USDA API (via the nutrition tools)
+   - A web search of a credible source (manufacturer label, government database, registered dietitian resource)
+
+   If you cannot find reliable data from any of these sources, tell the user what you searched and that you couldn't find verified nutrition information. Do not fill in values from memory — they may be outdated or inaccurate.
 
 ## Examples
 
@@ -42,4 +48,4 @@ Analyze nutritional content of foods using the nutrition-mcp tools.
 
 - All values are per 100g unless a serving size is specified
 - The local database must be seeded on first use via `nutrition_seed` (~3 min, runs in background)
-- Tier 3 (automatic web search) is planned for a future phase
+- When a food isn't in the local DB or USDA, always web search for accurate data and cache it with `nutrition_cache_add` — do not rely on training data for nutrition values
