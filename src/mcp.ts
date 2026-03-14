@@ -196,9 +196,13 @@ server.tool(
   {},
   async () => {
     const stats = store.getStats();
+    const result = {
+      ...stats,
+      usda_api_configured: !!process.env.USDA_API_KEY,
+    };
     return {
       content: [
-        { type: "text" as const, text: JSON.stringify(stats, null, 2) },
+        { type: "text" as const, text: JSON.stringify(result, null, 2) },
       ],
     };
   }

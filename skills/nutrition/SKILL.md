@@ -9,14 +9,17 @@ user_invocable: true
 
 Analyze nutritional content of foods using the nutrition-mcp tools.
 
-## First-time setup
+## First use — always run this before the first lookup
 
-Check if `USDA_API_KEY` is set by running `nutrition_cache_stats`. If the response works but searches return few results for common branded foods, the USDA API key is likely missing. Guide the user:
+Before the first lookup in a session, call `nutrition_cache_stats` and check `usda_api_configured` in the response.
 
-1. Get a free key at https://fdc.nal.usda.gov/api-key-signup
-2. Add `USDA_API_KEY=your_key` to the project's `.env` file (with direnv) or export it in their shell
+If `usda_api_configured` is `false`, **tell the user immediately** (before showing any results):
 
-The USDA API is strongly recommended — without it, only the local OpenNutrition dataset (326K foods) is searched, and many branded/packaged foods won't be found.
+> ⚠️ USDA API key is not configured. Searches are limited to the local database — many branded and packaged foods won't be found. To enable full coverage:
+> 1. Get a free key at https://fdc.nal.usda.gov/api-key-signup
+> 2. Add `USDA_API_KEY=your_key` to your `.env` file and restart Claude Code
+
+Then proceed with the lookup normally.
 
 ## When the user invokes this skill
 
