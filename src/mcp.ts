@@ -13,6 +13,7 @@ import { VERSION } from "./version.js";
 
 const store = new NutritionStore();
 const orchestrator = new SearchOrchestrator(store);
+let seeding = false;
 
 const server = new McpServer({
   name: "nutrition-mcp",
@@ -28,14 +29,13 @@ server.tool(
   },
   async ({ query, limit }) => {
     const results = await orchestrator.search(query, limit);
-    return {
-      content: [
-        {
-          type: "text" as const,
-          text: JSON.stringify(results, null, 2),
-        },
-      ],
-    };
+    const content: Array<{ type: "text"; text: string }> = [
+      { type: "text" as const, text: JSON.stringify(results, null, 2) },
+    ];
+    if (seeding && results.length === 0) {
+      content.push({ type: "text" as const, text: "Note: Local database is still being seeded. Results will improve once seeding completes. Run 'npx nutrition-mcp build-db' to seed manually." });
+    }
+    return { content };
   }
 );
 
@@ -199,6 +199,7 @@ server.tool(
     const result = {
       ...stats,
       usda_api_configured: !!process.env.USDA_API_KEY,
+      ...(seeding ? { seeding: true, seeding_message: "Database is being seeded in the background. Local search results will appear once complete." } : {}),
     };
     return {
       content: [
@@ -209,29 +210,34 @@ server.tool(
 );
 
 export async function startServer(): Promise<void> {
-  // Auto-seed on first run if no local foods exist
-  const stats = store.getStats();
-  if (!stats.by_tier.local) {
-    console.error("[nutrition-mcp] No local database found. Seeding (this may take a few minutes on first run)...");
-    try {
-      const { seedDatabase } = await import("./seed.js");
-      await seedDatabase();
-      // Reopen store to pick up the newly seeded database
-      store.reopen();
-      console.error("[nutrition-mcp] Database seeded successfully.");
-    } catch (err) {
-      console.error("[nutrition-mcp] Auto-seed failed. Server will start without local data:", err);
-      console.error("[nutrition-mcp] Run 'npx nutrition-mcp build-db' manually to seed.");
-    }
-  }
-
   if (!process.env.USDA_API_KEY) {
     console.error("[nutrition-mcp] Warning: USDA_API_KEY not set. Only local database will be searched.");
     console.error("[nutrition-mcp] Get a free key at https://fdc.nal.usda.gov/api-key-signup");
   }
 
+  // Connect transport immediately — never block on seeding
   const transport = new StdioServerTransport();
   await server.connect(transport);
+
+  // Auto-seed in background on first run if no local foods exist
+  const stats = store.getStats();
+  if (!stats.by_tier.local) {
+    console.error("[nutrition-mcp] No local database found. Seeding in background (this may take a few minutes)...");
+    console.error("[nutrition-mcp] Tools will work without local data until seeding completes.");
+    seeding = true;
+    import("./seed.js")
+      .then(({ seedDatabase }) => seedDatabase())
+      .then(() => {
+        store.reopen();
+        seeding = false;
+        console.error("[nutrition-mcp] Database seeded successfully. Local search is now available.");
+      })
+      .catch((err) => {
+        seeding = false;
+        console.error("[nutrition-mcp] Auto-seed failed:", err);
+        console.error("[nutrition-mcp] Run 'npx nutrition-mcp build-db' manually to seed.");
+      });
+  }
 }
 
 // Auto-start only when run directly (not imported by CLI)
