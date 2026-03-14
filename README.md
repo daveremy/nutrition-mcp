@@ -11,7 +11,7 @@ npm run build
 
 ### Database
 
-The database is automatically seeded on first run — no manual step required. The first startup downloads and imports the OpenNutrition dataset (~326K foods), which takes a few minutes. Subsequent starts are instant.
+The local database is seeded on first use via the `nutrition_seed` tool (triggered automatically by the companion skill). The first seed downloads and imports the OpenNutrition dataset (~326K foods), which takes a few minutes in the background. Tools work immediately — USDA API results are available while seeding runs.
 
 The database is stored at `~/.nutrition-mcp/nutrition.db`.
 
@@ -142,9 +142,13 @@ Override nutrition data for an existing food. Creates a corrected web-tier copy 
 | `serving_size` | string | no | Corrected serving size |
 | `serving_weight_g` | number | no | Corrected serving weight |
 
+#### `nutrition_seed`
+
+Seed the local database with 326K+ foods in the background. Returns immediately — call again to check progress. Idempotent: no-op if already seeded, returns progress if in progress. No parameters.
+
 #### `nutrition_cache_stats`
 
-Returns cache statistics: total foods, count by source tier, and last cached timestamp. No parameters.
+Returns cache statistics: total foods, count by source tier, last cached timestamp, and seed status (phase, progress percentage). No parameters.
 
 ## CLI
 
@@ -173,6 +177,8 @@ cp -r skills/nutrition ~/.claude/skills/
 ```
 
 ## How it works
+
+For a detailed technical overview, see [docs/architecture.md](docs/architecture.md).
 
 ### 3-tier search
 

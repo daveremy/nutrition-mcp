@@ -6,6 +6,7 @@ import { pipeline } from "node:stream/promises";
 
 import Database from "better-sqlite3";
 
+import { setSeedPhase, setSeedInserted } from "./seed-state.js";
 import { getDbDir, getDbPath, log, normalizeBarcode } from "./utils.js";
 
 const DATASET_URL =
@@ -152,6 +153,7 @@ async function downloadAndExtractTsv(destDir: string): Promise<string> {
   // Save zip
   const writeStream = createWriteStream(zipPath);
   await pipeline(Readable.fromWeb(res.body as any), writeStream);
+  setSeedPhase("extracting");
   log("Download complete, extracting...");
 
   // Extract using yauzl
@@ -187,6 +189,8 @@ async function downloadAndExtractTsv(destDir: string): Promise<string> {
 }
 
 export async function seedDatabase(): Promise<void> {
+  setSeedInserted(0);
+  setSeedPhase("downloading");
   const dbDir = getDbDir();
   const dbPath = getDbPath();
   const tmpDbPath = dbPath + ".tmp";
@@ -217,6 +221,7 @@ export async function seedDatabase(): Promise<void> {
   `);
 
   // Stream TSV line-by-line and insert in batches to limit memory usage
+  setSeedPhase("importing");
   log("Importing foods...");
   const BATCH_SIZE = 10000;
   let headers: string[] = [];
@@ -260,6 +265,7 @@ export async function seedDatabase(): Promise<void> {
       // Map outside the transaction to avoid JSON parsing under the write lock
       const mapped = batch.map(mapTsvRow).filter((r): r is NonNullable<typeof r> => r !== null);
       insertBatch(mapped);
+      setSeedInserted(inserted);
       batch = [];
       if (inserted % 50000 < BATCH_SIZE) {
         log(`  ${inserted.toLocaleString()} foods imported...`);
@@ -294,6 +300,7 @@ export async function seedDatabase(): Promise<void> {
   }
 
   // Create FTS and rebuild index (after all data including cached entries)
+  setSeedPhase("indexing");
   log("Building search index...");
   db.exec(FTS_SCHEMA);
   db.exec("INSERT INTO foods_fts(foods_fts) VALUES ('rebuild')");
@@ -305,6 +312,8 @@ export async function seedDatabase(): Promise<void> {
     fs.unlinkSync(dbPath);
   }
   fs.renameSync(tmpDbPath, dbPath);
+  setSeedInserted(inserted);
+  setSeedPhase("done");
   log(`Database ready (${dbPath})`);
 
   // Clean up zip file (keep TSV for faster rebuilds)

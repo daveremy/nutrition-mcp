@@ -8,12 +8,32 @@ import { z } from "zod";
 
 import { NutritionStore } from "./store.js";
 import { SearchOrchestrator } from "./search.js";
+import { getSeedState, isSeeding, seedPercent, seedProgressMessage, setSeedError, setSeedPhase, startSeed } from "./seed-state.js";
 import { log, normalizeBarcode } from "./utils.js";
 import { VERSION } from "./version.js";
 
 const store = new NutritionStore();
 const orchestrator = new SearchOrchestrator(store);
-let seeding = false;
+
+/** Auto-trigger seeding if DB is empty and no seed is running/done. */
+function ensureSeeded(): void {
+  const { phase } = getSeedState();
+  if (phase !== "idle" && phase !== "failed") return; // already in progress or done
+  if (store.getStats().by_tier.local) return; // already has local data
+  setSeedPhase("downloading"); // mark active immediately so isSeeding() is true before async work starts
+  startSeed(() =>
+    import("./seed.js")
+      .then(({ seedDatabase }) => seedDatabase())
+      .then(() => {
+        store.reopen();
+        log("Database seeded successfully. Local search is now available.");
+      })
+      .catch((err) => {
+        setSeedError(err);
+        log("Seed failed:", err);
+      })
+  );
+}
 
 const server = new McpServer({
   name: "nutrition-mcp",
@@ -28,12 +48,13 @@ server.tool(
     limit: z.number().min(1).max(50).default(10).describe("Max results to return"),
   },
   async ({ query, limit }) => {
+    ensureSeeded();
     const results = await orchestrator.search(query, limit);
     const content: Array<{ type: "text"; text: string }> = [
       { type: "text" as const, text: JSON.stringify(results, null, 2) },
     ];
-    if (seeding && results.length === 0) {
-      content.push({ type: "text" as const, text: "Note: Local database is still being seeded. Results will improve once seeding completes. Run 'npx nutrition-mcp build-db' to seed manually." });
+    if (isSeeding()) {
+      content.push({ type: "text" as const, text: seedProgressMessage() });
     }
     return { content };
   }
@@ -68,18 +89,18 @@ server.tool(
     barcode: z.string().describe("Barcode (12 or 13 digits)"),
   },
   async ({ barcode }) => {
+    ensureSeeded();
     const food = await orchestrator.lookupBarcode(barcode);
+    const content: Array<{ type: "text"; text: string }> = [];
     if (!food) {
-      return {
-        content: [{ type: "text" as const, text: "Food not found for this barcode" }],
-        isError: true,
-      };
+      content.push({ type: "text" as const, text: "Food not found for this barcode" });
+    } else {
+      content.push({ type: "text" as const, text: JSON.stringify(food, null, 2) });
     }
-    return {
-      content: [
-        { type: "text" as const, text: JSON.stringify(food, null, 2) },
-      ],
-    };
+    if (isSeeding()) {
+      content.push({ type: "text" as const, text: seedProgressMessage() });
+    }
+    return { content, ...(!food ? { isError: true } : {}) };
   }
 );
 
@@ -191,15 +212,58 @@ server.tool(
 );
 
 server.tool(
+  "nutrition_seed",
+  "Seed the local database with 326K+ foods (~60MB download, takes a few minutes). Returns immediately — seeding runs in the background. Call again to check progress. Idempotent: no-op if already seeded.",
+  {},
+  async () => {
+    const seedState = getSeedState();
+
+    // Already seeded
+    if (seedState.phase === "done" || store.getStats().by_tier.local) {
+      return {
+        content: [{ type: "text" as const, text: "Local database is already seeded." }],
+      };
+    }
+
+    // Already in progress
+    if (isSeeding()) {
+      return {
+        content: [{ type: "text" as const, text: seedProgressMessage() }],
+      };
+    }
+
+    // Start or retry seeding
+    if (seedState.phase === "failed") {
+      log(`Previous seed failed (${seedState.error}), retrying...`);
+    }
+    ensureSeeded();
+
+    return {
+      content: [{ type: "text" as const, text: "Seeding started. This will take a few minutes. You can continue searching — USDA API results are available immediately. Call this tool again to check progress." }],
+    };
+  }
+);
+
+server.tool(
   "nutrition_cache_stats",
-  "Get statistics about the local nutrition cache: total foods, breakdown by source tier, and last cached timestamp.",
+  "Get statistics about the local nutrition cache: total foods, breakdown by source tier, last cached timestamp, and seed status.",
   {},
   async () => {
     const stats = store.getStats();
+    const { phase, inserted, totalEstimate, error } = getSeedState();
     const result = {
       ...stats,
       usda_api_configured: !!process.env.USDA_API_KEY,
-      ...(seeding ? { seeding: true, seeding_message: "Database is being seeded in the background. Local search results will appear once complete." } : {}),
+      seed: {
+        phase,
+        ...(isSeeding() ? {
+          inserted,
+          total_estimate: totalEstimate,
+          percent: seedPercent(),
+          message: seedProgressMessage(),
+        } : {}),
+        ...(phase === "failed" ? { error } : {}),
+      },
     };
     return {
       content: [
@@ -215,29 +279,8 @@ export async function startServer(): Promise<void> {
     log("Get a free key at https://fdc.nal.usda.gov/api-key-signup");
   }
 
-  // Connect transport immediately — never block on seeding
   const transport = new StdioServerTransport();
   await server.connect(transport);
-
-  // Auto-seed in background on first run if no local foods exist
-  const stats = store.getStats();
-  if (!stats.by_tier.local) {
-    log("No local database found. Seeding in background (this may take a few minutes)...");
-    log("Tools will work without local data until seeding completes.");
-    seeding = true;
-    import("./seed.js")
-      .then(({ seedDatabase }) => seedDatabase())
-      .then(() => {
-        store.reopen();
-        seeding = false;
-        log("Database seeded successfully. Local search is now available.");
-      })
-      .catch((err) => {
-        seeding = false;
-        log("Auto-seed failed:", err);
-        log("Run 'npx nutrition-mcp build-db' manually to seed.");
-      });
-  }
 }
 
 // Auto-start only when run directly (not imported by CLI)
