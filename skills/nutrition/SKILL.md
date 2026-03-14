@@ -9,25 +9,18 @@ user_invocable: true
 
 Analyze nutritional content of foods using the nutrition-mcp tools.
 
-## First use — always run this before the first lookup
-
-Before the first lookup in a session, call `nutrition_cache_stats` and check `usda_api_configured` in the response.
-
-If `usda_api_configured` is `false`, **tell the user immediately** (before showing any results):
-
-> ⚠️ USDA API key is not configured. Searches are limited to the local database — many branded and packaged foods won't be found. To enable full coverage:
-> 1. Get a free key at https://fdc.nal.usda.gov/api-key-signup
-> 2. Add `USDA_API_KEY=your_key` to your `.env` file and restart Claude Code
-
-Then proceed with the lookup normally.
-
 ## When the user invokes this skill
 
-1. **Determine query type**:
-   - All digits (12-13 chars) → barcode lookup
-   - Otherwise → food name search
+**Call the search/lookup tool immediately** — do NOT call `nutrition_cache_stats` first. Speed matters.
 
-2. **Run the appropriate lookup** and present results in a table showing name, brand, and per-100g macros (calories, protein, fat, carbs). Include fiber/sugar/sodium when available. Note the source (local, USDA, or cached).
+1. **Determine query type and run the lookup in a single step**:
+   - All digits (12-13 chars) → `nutrition_barcode`
+   - Otherwise → `nutrition_search`
+
+2. **Check the results**: if `source_tier` is only "local" for all results (no "usda" tier), append a note after the table:
+   > Note: USDA API key is not configured — results are local-only. Get a free key at https://fdc.nal.usda.gov/api-key-signup and add `USDA_API_KEY=your_key` to `.env` for broader coverage.
+
+3. **Present results** in a table showing name, brand, and per-100g macros (calories, protein, fat, carbs). Include fiber/sugar/sodium when available. Note the source (local, USDA, or cached).
 
 3. **If the user wants details** on a specific result, look up the full record by ID.
 
