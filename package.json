@@ -1,6 +1,6 @@
 {
   "name": "nutrition-mcp",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "3-tier nutrition lookup MCP server with local SQLite caching",
   "type": "module",
   "main": "dist/mcp.js",
