@@ -30,7 +30,15 @@ Analyze nutritional content of foods using the nutrition-mcp tools.
    - If seeding is in progress: show the progress percentage and suggest waiting.
    - If seeding is done and local data exists: **search the web** for the food's official nutrition information (manufacturer's website, product page, or a reputable nutrition database). Then cache the verified data using `nutrition_cache_add` with the source URL. This ensures the user gets accurate, up-to-date nutrition data rather than estimates.
 
-7. **IMPORTANT — never guess nutrition values from training data.** Nutrition information must come from one of these sources:
+7. **If the user says a result looks wrong** (e.g. "that can't be right", "those calories seem off", "this is the wrong product"):
+   - **Web search** for the food's official nutrition information from a credible source (manufacturer label, product page, government database).
+   - If you find corrected data: use `nutrition_override` with the corrected fields and the original food's ID. This preserves the original entry and creates a corrected copy. Tell the user what you changed and cite the source.
+   - If the cached entry is simply the wrong product (not a data error): delete it with `nutrition_cache_delete`, then search the web for the correct product and cache it with `nutrition_cache_add`.
+   - If you cannot find better data, tell the user and suggest they provide the correct values manually.
+
+8. **Browsing cached entries**: If the user wants to review what's been cached (e.g. "show me my cached foods", "what have I saved"), use `nutrition_cache_list`. Filter by `tier` ("usda", "web", or "all") as appropriate.
+
+9. **IMPORTANT — never guess nutrition values from training data.** Nutrition information must come from one of these sources:
    - The local database or USDA API (via the nutrition tools)
    - A web search of a credible source (manufacturer label, government database, registered dietitian resource)
 
