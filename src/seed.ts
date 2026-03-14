@@ -8,6 +8,10 @@ import Database from "better-sqlite3";
 
 import { getDbDir, getDbPath, normalizeBarcode } from "./utils.js";
 
+function log(msg: string): void {
+  console.error(`[nutrition-mcp] ${msg}`);
+}
+
 const DATASET_URL =
   "https://github.com/daveremy/nutrition-mcp/releases/download/dataset-v2025.1/opennutrition-dataset-2025.1.zip";
 
@@ -139,11 +143,11 @@ async function downloadAndExtractTsv(destDir: string): Promise<string> {
 
   // Skip download if TSV already exists
   if (fs.existsSync(tsvPath)) {
-    console.log("Using cached TSV file");
+    log("Using cached TSV file");
     return tsvPath;
   }
 
-  console.log(`Downloading dataset from ${DATASET_URL}...`);
+  log(`Downloading dataset (~60MB)...`);
   const res = await fetch(DATASET_URL);
   if (!res.ok || !res.body) {
     throw new Error(`Download failed: ${res.status}`);
@@ -152,7 +156,7 @@ async function downloadAndExtractTsv(destDir: string): Promise<string> {
   // Save zip
   const writeStream = createWriteStream(zipPath);
   await pipeline(Readable.fromWeb(res.body as any), writeStream);
-  console.log("Download complete, extracting...");
+  log("Download complete, extracting...");
 
   // Extract using yauzl
   const yauzl = await import("yauzl");
@@ -169,7 +173,7 @@ async function downloadAndExtractTsv(destDir: string): Promise<string> {
             const out = createWriteStream(tsvPath);
             readStream.pipe(out);
             out.on("finish", () => {
-              console.log("Extraction complete");
+              log("Extraction complete");
               resolve(tsvPath);
             });
           });
@@ -195,7 +199,7 @@ export async function seedDatabase(): Promise<void> {
   const tsvPath = await downloadAndExtractTsv(dbDir);
 
   // Build temp DB
-  console.log("Building database...");
+  log("Building database...");
   if (fs.existsSync(tmpDbPath)) {
     fs.unlinkSync(tmpDbPath);
   }
@@ -217,7 +221,7 @@ export async function seedDatabase(): Promise<void> {
   `);
 
   // Stream TSV line-by-line and insert in batches to limit memory usage
-  console.log("Parsing and inserting...");
+  log("Importing foods...");
   const BATCH_SIZE = 10000;
   let headers: string[] = [];
   let batch: TsvRow[] = [];
@@ -261,6 +265,9 @@ export async function seedDatabase(): Promise<void> {
     if (batch.length >= BATCH_SIZE) {
       insertBatch(batch);
       batch = [];
+      if (inserted % 50000 < BATCH_SIZE) {
+        log(`  ${inserted.toLocaleString()} foods imported...`);
+      }
     }
   }
 
@@ -270,16 +277,16 @@ export async function seedDatabase(): Promise<void> {
   }
 
   if (headers.length === 0) throw new Error("Empty TSV file");
-  console.log(`Inserted ${inserted} foods`);
+  log(`Imported ${inserted.toLocaleString()} foods`);
 
   // Create FTS and rebuild index
-  console.log("Building FTS index...");
+  log("Building search index...");
   db.exec(FTS_SCHEMA);
   db.exec("INSERT INTO foods_fts(foods_fts) VALUES ('rebuild')");
 
   // Preserve cached data from existing DB
   if (fs.existsSync(dbPath)) {
-    console.log("Preserving cached USDA/web data from existing database...");
+    log("Preserving cached USDA/web data...");
     try {
       db.exec(`ATTACH DATABASE '${dbPath}' AS old_db`);
       db.exec(`
@@ -288,7 +295,7 @@ export async function seedDatabase(): Promise<void> {
         WHERE source_tier IN ('usda', 'web')
       `);
       db.exec("DETACH DATABASE old_db");
-      console.log("Cached data preserved");
+      log("Cached data preserved");
     } catch (err) {
       console.error("Warning: could not preserve cached data:", err);
     }
@@ -301,7 +308,7 @@ export async function seedDatabase(): Promise<void> {
     fs.unlinkSync(dbPath);
   }
   fs.renameSync(tmpDbPath, dbPath);
-  console.log(`Database ready at ${dbPath}`);
+  log(`Database ready (${dbPath})`);
 
   // Clean up zip file (keep TSV for faster rebuilds)
   const zipPath = path.join(dbDir, "dataset.zip");
