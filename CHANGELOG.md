@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.4.0
 
 **Breaking change:** `calories`/`protein`/`fat`/`carbs`/`fiber`/`sugar`/`sodium` on
 `nutrition_search`, `nutrition_lookup`, `nutrition_barcode`, and `nutrition_cache_list` results
