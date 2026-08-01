@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.4.1
+
+- Fix: `serving_weight_g` is now derived from `serving_size` when the column is NULL
+  (99.98% of NULL-weight rows carry a parseable weight, e.g. `"42GRM"`, `"8 oz"`, `"240 ml"`),
+  instead of falling back to `basis: "per_100g"` and pushing the conversion onto the caller.
+  Derivation is tiered by confidence: explicit grams and mass units (oz) are deterministic;
+  volumetric units (ml, l, cup, tbsp, tsp, fl oz) assume water-like density (1.0 g/mL), which
+  is wrong for oils/honey. New `weight_source` field (`"column"` | `"parsed_grams"` |
+  `"parsed_mass"` | `"parsed_volume"`) on every result with a resolved weight discloses which
+  — see #5 and docs/CALLER-GUIDE.md. Strings that aren't confidently parseable (e.g. `"1
+  bottle"`, `"1 can"`) are left as `basis: "per_100g"`, unchanged from before.
+- Fix: `nutrition_search` no longer lets a `calories: null` row outrank a complete row for the
+  same query — completeness (non-null calories) is now the primary sort key, with FTS
+  relevance (`bm25`) as the tiebreak within each completeness bucket. See #6.
+
 ## 0.4.0
 
 **Breaking change:** `calories`/`protein`/`fat`/`carbs`/`fiber`/`sugar`/`sodium` on

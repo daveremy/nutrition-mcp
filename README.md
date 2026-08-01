@@ -85,17 +85,23 @@ Returns an array of results, each shaped like:
   "source_tier": "local", "serving_size": "1 bar",
   "calories": 300, "protein": 18.0, "fat": 12.0, "carbs": 22.0,   // scaled to the serving
   "basis": "per_serving", "basis_weight_g": 70,                   // never inferred — always check this
+  "weight_source": "column",                                     // "column" | "parsed_grams" | "parsed_mass" | "parsed_volume"
   "per_100g": { "calories": 429, "protein": 25.7, "fat": 17.1, "carbs": 31.4 },
   "atwater_delta_pct": 0.2, "is_correction": false,
   "verified_fields": null, "superseded_by": null
 }
 ```
 
-If `serving_weight_g` is unknown for a food (~13.5% of the local dataset), `basis` is
-`"per_100g"` instead and the headline values are the canonical per-100g numbers — never silently
-mislabeled as a serving. `per_100g` is always present regardless of basis. See
-[docs/CALLER-GUIDE.md](docs/CALLER-GUIDE.md) for how to use `basis`, `atwater_delta_pct`,
-`is_correction`, and `superseded_by`.
+If `serving_weight_g` isn't stored for a food, the server tries to derive it by parsing
+`serving_size` (e.g. `"42GRM"` -> 42g, `"8 oz"` -> 226.8g, `"1 cup"` -> 240g assuming
+water-like density) before falling back to `per_100g`. `weight_source` tells you which:
+`"column"` (stated) and `"parsed_grams"`/`"parsed_mass"` (deterministic) are as trustworthy as
+a stated weight; `"parsed_volume"` assumes 1.0 g/mL density and is wrong for oils/honey — see
+[docs/CALLER-GUIDE.md](docs/CALLER-GUIDE.md). Only when no weight can be resolved at all (e.g.
+`serving_size: "1 bottle"`) does `basis` fall back to `"per_100g"`, with the headline values
+being the canonical per-100g numbers — never silently mislabeled as a serving. `per_100g` is
+always present regardless of basis. See docs/CALLER-GUIDE.md for how to use `basis`,
+`weight_source`, `atwater_delta_pct`, `is_correction`, and `superseded_by`.
 
 #### `nutrition_lookup`
 
@@ -226,9 +232,9 @@ cp -r skills/nutrition ~/.claude/skills/
 ## How it works
 
 For a detailed technical overview, see [docs/architecture.md](docs/architecture.md). For guidance
-on interpreting responses as a calling agent (trusting `basis`, `atwater_delta_pct`,
-`is_correction`; when to verify vs. ask the user; how to correct from a physical label), see
-[docs/CALLER-GUIDE.md](docs/CALLER-GUIDE.md).
+on interpreting responses as a calling agent (trusting `basis`, `weight_source`,
+`atwater_delta_pct`, `is_correction`; when to verify vs. ask the user; how to correct from a
+physical label), see [docs/CALLER-GUIDE.md](docs/CALLER-GUIDE.md).
 
 ### 3-tier search
 
@@ -239,8 +245,9 @@ on interpreting responses as a calling agent (trusting `basis`, `atwater_delta_p
 ### Data
 
 Nutrition values are **stored** per 100g internally. What a tool call **returns** is scaled to the
-food's serving whenever `serving_weight_g` is known — check the `basis` field on every result
-rather than assuming (see the `nutrition_search`/`nutrition_lookup` sections above, and
+food's serving whenever a weight is known or can be derived from `serving_size` — check the
+`basis` field on every result rather than assuming (see the `nutrition_search`/`nutrition_lookup`
+sections above, and
 [docs/CALLER-GUIDE.md](docs/CALLER-GUIDE.md) for a full walkthrough for callers). Core macros:
 calories (kcal), protein (g), fat (g), carbs (g), fiber (g), sugar (g), sodium (mg).
 

@@ -43,7 +43,7 @@ const server = new McpServer({
 
 server.tool(
   "nutrition_search",
-  "Search for foods by name. Returns matching foods with macros (calories, protein, fat, carbs) scaled to the food's serving — check the `basis` field (\"per_serving\" vs \"per_100g\") on every result, it is never implied. `per_100g` on each result carries the canonical values regardless of basis. `is_correction`/`superseded_by`/`verified_fields` signal trust; see docs/CALLER-GUIDE.md. Searches local database first, then USDA API.",
+  "Search for foods by name. Returns matching foods with macros (calories, protein, fat, carbs) scaled to the food's serving — check the `basis` field (\"per_serving\" vs \"per_100g\") on every result, it is never implied. `weight_source` (\"column\" | \"parsed_grams\" | \"parsed_mass\" | \"parsed_volume\") tells you whether the serving weight was stated or derived; `parsed_volume` assumes water-like density and is wrong for oils/honey. `per_100g` on each result carries the canonical values regardless of basis. `is_correction`/`superseded_by`/`verified_fields` signal trust; see docs/CALLER-GUIDE.md. Searches local database first, then USDA API.",
   {
     query: z.string().describe("Food name to search for"),
     limit: z.number().min(1).max(50).default(10).describe("Max results to return"),
@@ -63,7 +63,7 @@ server.tool(
 
 server.tool(
   "nutrition_lookup",
-  "Look up a specific food by ID. Returns complete nutrition data scaled to the serving (check `basis`/`basis_weight_g`; `per_100g` always has the canonical values too). If `superseded_by` is non-null, a correction exists for this exact id and its id should be looked up instead. See docs/CALLER-GUIDE.md for how to use these signals.",
+  "Look up a specific food by ID. Returns complete nutrition data scaled to the serving (check `basis`/`basis_weight_g`/`weight_source`; `per_100g` always has the canonical values too). If `superseded_by` is non-null, a correction exists for this exact id and its id should be looked up instead. See docs/CALLER-GUIDE.md for how to use these signals.",
   {
     id: z.string().describe("Food ID (e.g. on_abc123, usda_12345)"),
   },
@@ -85,7 +85,7 @@ server.tool(
 
 server.tool(
   "nutrition_barcode",
-  "Look up a food by barcode (UPC-A 12-digit or EAN-13). Returns data scaled to the serving (check `basis`/`basis_weight_g`; `per_100g` always has the canonical values too) and, if a correction exists for this barcode, returns the correction rather than the original. Searches local database first, then USDA API.",
+  "Look up a food by barcode (UPC-A 12-digit or EAN-13). Returns data scaled to the serving (check `basis`/`basis_weight_g`/`weight_source`; `per_100g` always has the canonical values too) and, if a correction exists for this barcode, returns the correction rather than the original. Searches local database first, then USDA API.",
   {
     barcode: z.string().describe("Barcode (12 or 13 digits)"),
   },
