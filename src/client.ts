@@ -31,6 +31,14 @@ function mapUsdaToFood(item: UsdaFoodResult, query?: string): Omit<FoodItem, "ca
 
   const barcode = item.gtinUpc ? normalizeBarcode(item.gtinUpc) : null;
 
+  // Only populate serving_weight_g when the unit is actually grams — servingSizeUnit varies
+  // (e.g. "fl oz" for beverages) and the number is meaningless as a weight otherwise. This was
+  // latent (all cached USDA rows historically have NULL serving_weight_g) but goes live the
+  // instant scaling-on-read is introduced: a "8 fl oz" item stored as serving_weight_g=8 would
+  // silently scale macros by 0.08, a 92% under-report.
+  const unit = (item.servingSizeUnit ?? "g").trim().toLowerCase();
+  const isGramUnit = unit === "g" || unit === "gram" || unit === "grams";
+
   return {
     id: `usda_${item.fdcId}`,
     name: item.description,
@@ -50,11 +58,13 @@ function mapUsdaToFood(item: UsdaFoodResult, query?: string): Omit<FoodItem, "ca
     serving_size: item.servingSize
       ? `${item.servingSize}${item.servingSizeUnit ?? "g"}`
       : null,
-    serving_weight_g: item.servingSize ?? null,
+    serving_weight_g: item.servingSize && isGramUnit ? item.servingSize : null,
     alternate_names_text: null,
     labels: null,
     ingredients: null,
     data_source: JSON.stringify({ source: "usda", fdcId: item.fdcId }),
+    is_correction: 0,
+    verified_fields: null,
   };
 }
 

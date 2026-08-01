@@ -39,6 +39,53 @@ describe("USDA Client", () => {
       assert.equal(result.sodium, 74);
       assert.equal(result.serving_size, "100g");
       assert.equal(result.source_query, "chicken");
+      assert.equal(result.serving_weight_g, 100);
+      assert.equal(result.is_correction, 0);
+      assert.equal(result.verified_fields, null);
+    });
+
+    describe("unit-blind serving weight (the bug found by the R3 prerequisite investigation)", () => {
+      it("populates serving_weight_g when servingSizeUnit is grams", () => {
+        const usdaItem: UsdaFoodResult = {
+          fdcId: 1,
+          description: "Grams Item",
+          foodNutrients: [],
+          servingSize: 85,
+          servingSizeUnit: "g",
+        };
+        const result = _mapUsdaToFood(usdaItem);
+        assert.equal(result.serving_weight_g, 85);
+      });
+
+      it("leaves serving_weight_g null when servingSizeUnit is not grams", () => {
+        // client.ts:51 already reads servingSizeUnit for the display string, proving the code
+        // knows units vary; the bug was storing the raw number as grams unconditionally
+        // regardless. An "8 fl oz" beverage stored as serving_weight_g=8 would silently scale
+        // macros by 0.08 (a 92% under-report) the instant scaling-on-read shipped.
+        const usdaItem: UsdaFoodResult = {
+          fdcId: 2,
+          description: "Beverage Item",
+          foodNutrients: [],
+          servingSize: 8,
+          servingSizeUnit: "fl oz",
+        };
+        const result = _mapUsdaToFood(usdaItem);
+        assert.equal(result.serving_weight_g, null);
+        // The display string still correctly carries the real unit — only the weight column,
+        // which the scaling fix multiplies by, is protected.
+        assert.equal(result.serving_size, "8fl oz");
+      });
+
+      it("treats a missing servingSizeUnit as grams (existing default behavior, unchanged)", () => {
+        const usdaItem: UsdaFoodResult = {
+          fdcId: 3,
+          description: "No Unit Item",
+          foodNutrients: [],
+          servingSize: 55,
+        };
+        const result = _mapUsdaToFood(usdaItem);
+        assert.equal(result.serving_weight_g, 55);
+      });
     });
 
     it("normalizes 12-digit UPC to 13-digit EAN-13", () => {

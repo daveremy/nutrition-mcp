@@ -7,6 +7,18 @@
   "bin": {
     "nutrition-mcp": "dist/cli.js"
   },
+  "author": "Dave Remy",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/daveremy/nutrition-mcp.git"
+  },
+  "homepage": "https://github.com/daveremy/nutrition-mcp#readme",
+  "bugs": {
+    "url": "https://github.com/daveremy/nutrition-mcp/issues"
+  },
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "build": "tsc",
     "prepack": "npm run build",

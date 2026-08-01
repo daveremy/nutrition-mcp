@@ -77,11 +77,33 @@ Search foods by name. Returns matching foods with macros.
 | `query` | string | required | Food name to search for |
 | `limit` | number | 10 | Max results (1-50) |
 
-Returns an array of `{ id, name, brand, calories, protein, fat, carbs, serving_size, source_tier }`.
+Returns an array of results, each shaped like:
+
+```jsonc
+{
+  "id": "on_fd_vUZSKMYWbRkt", "name": "G2G Coconut Almond Protein Bar", "brand": "G2G",
+  "source_tier": "local", "serving_size": "1 bar",
+  "calories": 300, "protein": 18.0, "fat": 12.0, "carbs": 22.0,   // scaled to the serving
+  "basis": "per_serving", "basis_weight_g": 70,                   // never inferred — always check this
+  "per_100g": { "calories": 429, "protein": 25.7, "fat": 17.1, "carbs": 31.4 },
+  "atwater_delta_pct": 0.2, "is_correction": false,
+  "verified_fields": null, "superseded_by": null
+}
+```
+
+If `serving_weight_g` is unknown for a food (~13.5% of the local dataset), `basis` is
+`"per_100g"` instead and the headline values are the canonical per-100g numbers — never silently
+mislabeled as a serving. `per_100g` is always present regardless of basis. See
+[docs/CALLER-GUIDE.md](docs/CALLER-GUIDE.md) for how to use `basis`, `atwater_delta_pct`,
+`is_correction`, and `superseded_by`.
 
 #### `nutrition_lookup`
 
-Look up a specific food by ID. Returns the complete food record with all nutrition fields.
+Look up a specific food by ID. Returns the complete food record, shaped like the `nutrition_search`
+result above (see there for the `basis`/`per_100g`/trust-signal fields) plus full source metadata
+(`type`, `ean_13`, `source_id`, `source_query`, `alternate_names_text`, `labels`, `ingredients`,
+`data_source`, `cached_at`, `updated_at`). If `superseded_by` is non-null, a correction exists for
+this exact id — look that id up instead.
 
 | Param | Type | Description |
 |-------|------|-------------|
@@ -89,7 +111,9 @@ Look up a specific food by ID. Returns the complete food record with all nutriti
 
 #### `nutrition_barcode`
 
-Look up a food by barcode. Accepts 12-digit UPC-A or 13-digit EAN-13. Searches locally first, then USDA.
+Look up a food by barcode. Accepts 12-digit UPC-A or 13-digit EAN-13. Searches locally first, then
+USDA. Same response shape as `nutrition_lookup`. If a correction exists for this barcode, returns
+the correction, not the original.
 
 | Param | Type | Description |
 |-------|------|-------------|
@@ -125,7 +149,8 @@ List cached food entries (USDA and web-sourced). Does not include the local Open
 | `limit` | number | 20 | Page size (1-100) |
 | `offset` | number | 0 | Pagination offset |
 
-Returns an array of `{ id, name, brand, calories, protein, fat, carbs, serving_size, source_tier }` ordered by most recently updated.
+Returns entries in the same shape as `nutrition_search`, ordered by most recently updated —
+except a correction (`is_correction: true`) always sorts ahead of the row it corrects.
 
 #### `nutrition_cache_delete`
 
@@ -137,22 +162,32 @@ Delete a cached food entry by ID. Refuses to delete local dataset entries (`on_`
 
 #### `nutrition_override`
 
-Override nutrition data for an existing food. Creates a corrected web-tier copy that inherits all fields from the original, with your corrections applied. Useful when USDA or local data is inaccurate. Repeated overrides of the same food update the existing override entry.
+Correct nutrition data for an existing food — e.g. from a physical label. Creates a corrected
+web-tier copy that inherits all fields from the original, with your corrections applied. Repeated
+corrections of the same food update the existing entry (not a new one each time). A correction
+takes precedence over the original on barcode lookup, and is signaled via `is_correction`/
+`superseded_by` on search/lookup/cache-list.
+
+Defaults to `basis: "per_serving"` — paste the numbers straight off a physical label, no need to
+divide by hand. `serving_weight_g` is **required in the same call** whenever you supply any macro
+field under `basis: "per_serving"` — the stored weight is never used automatically, since it may
+be exactly what's wrong.
 
 | Param | Type | Required | Description |
 |-------|------|----------|-------------|
-| `id` | string | yes | ID of the food to override |
+| `id` | string | yes | ID of the food to correct |
 | `name` | string | no | Corrected name |
 | `brand` | string | no | Corrected brand |
-| `calories` | number | no | Corrected calories per 100g |
-| `protein` | number | no | Corrected protein g per 100g |
-| `fat` | number | no | Corrected fat g per 100g |
-| `carbs` | number | no | Corrected carbs g per 100g |
-| `fiber` | number | no | Corrected fiber g per 100g |
-| `sugar` | number | no | Corrected sugar g per 100g |
-| `sodium` | number | no | Corrected sodium mg per 100g |
-| `serving_size` | string | no | Corrected serving size |
-| `serving_weight_g` | number | no | Corrected serving weight |
+| `basis` | `"per_serving"` \| `"per_100g"` | no (default `per_serving`) | Whether the macro fields below are per-serving (the label case) or per-100g |
+| `calories` | number | no | Corrected calories, per `basis` |
+| `protein` | number | no | Corrected protein g, per `basis` |
+| `fat` | number | no | Corrected fat g, per `basis` |
+| `carbs` | number | no | Corrected carbs g, per `basis` |
+| `fiber` | number | no | Corrected fiber g, per `basis` |
+| `sugar` | number | no | Corrected sugar g, per `basis` |
+| `sodium` | number | no | Corrected sodium mg, per `basis` |
+| `serving_size` | string | no | Corrected serving size description |
+| `serving_weight_g` | number (>0) | required with `basis: "per_serving"` + any macro field | Corrected serving weight in grams |
 
 #### `nutrition_seed`
 
@@ -190,7 +225,10 @@ cp -r skills/nutrition ~/.claude/skills/
 
 ## How it works
 
-For a detailed technical overview, see [docs/architecture.md](docs/architecture.md).
+For a detailed technical overview, see [docs/architecture.md](docs/architecture.md). For guidance
+on interpreting responses as a calling agent (trusting `basis`, `atwater_delta_pct`,
+`is_correction`; when to verify vs. ask the user; how to correct from a physical label), see
+[docs/CALLER-GUIDE.md](docs/CALLER-GUIDE.md).
 
 ### 3-tier search
 
@@ -200,9 +238,14 @@ For a detailed technical overview, see [docs/architecture.md](docs/architecture.
 
 ### Data
 
-All nutrition values are per 100g. Core macros: calories (kcal), protein (g), fat (g), carbs (g), fiber (g), sugar (g), sodium (mg).
+Nutrition values are **stored** per 100g internally. What a tool call **returns** is scaled to the
+food's serving whenever `serving_weight_g` is known — check the `basis` field on every result
+rather than assuming (see the `nutrition_search`/`nutrition_lookup` sections above, and
+[docs/CALLER-GUIDE.md](docs/CALLER-GUIDE.md) for a full walkthrough for callers). Core macros:
+calories (kcal), protein (g), fat (g), carbs (g), fiber (g), sugar (g), sodium (mg).
 
-Foods are identified by prefixed IDs: `on_` (OpenNutrition), `usda_` (USDA), `web_` (manually cached).
+Foods are identified by prefixed IDs: `on_` (OpenNutrition), `usda_` (USDA), `web_` (manually
+cached or corrected via `nutrition_override`).
 
 ## Development
 

@@ -131,6 +131,8 @@ function mapTsvRow(row: TsvRow) {
     labels: row["labels"] ? row["labels"] : null, // already JSON array string
     ingredients: row["ingredients"]?.trim() || null,
     data_source: JSON.stringify({ source: "open_nutrition", id: sourceId }),
+    is_correction: 0,
+    verified_fields: null,
   };
 }
 

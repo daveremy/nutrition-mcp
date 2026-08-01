@@ -8,6 +8,7 @@ import { z } from "zod";
 
 import { NutritionStore } from "./store.js";
 import { SearchOrchestrator } from "./search.js";
+import { resolveOverrideInput } from "./scaling.js";
 import { getSeedState, isSeeding, seedPercent, seedProgressMessage, setSeedError, setSeedPhase, startSeed } from "./seed-state.js";
 import { log, normalizeBarcode } from "./utils.js";
 import { VERSION } from "./version.js";
@@ -42,7 +43,7 @@ const server = new McpServer({
 
 server.tool(
   "nutrition_search",
-  "Search for foods by name. Returns matching foods with macros (calories, protein, fat, carbs). Searches local database first, then USDA API.",
+  "Search for foods by name. Returns matching foods with macros (calories, protein, fat, carbs) scaled to the food's serving — check the `basis` field (\"per_serving\" vs \"per_100g\") on every result, it is never implied. `per_100g` on each result carries the canonical values regardless of basis. `is_correction`/`superseded_by`/`verified_fields` signal trust; see docs/CALLER-GUIDE.md. Searches local database first, then USDA API.",
   {
     query: z.string().describe("Food name to search for"),
     limit: z.number().min(1).max(50).default(10).describe("Max results to return"),
@@ -62,7 +63,7 @@ server.tool(
 
 server.tool(
   "nutrition_lookup",
-  "Look up a specific food by ID. Returns complete nutrition data including all macros, serving info, and source metadata.",
+  "Look up a specific food by ID. Returns complete nutrition data scaled to the serving (check `basis`/`basis_weight_g`; `per_100g` always has the canonical values too). If `superseded_by` is non-null, a correction exists for this exact id and its id should be looked up instead. See docs/CALLER-GUIDE.md for how to use these signals.",
   {
     id: z.string().describe("Food ID (e.g. on_abc123, usda_12345)"),
   },
@@ -84,7 +85,7 @@ server.tool(
 
 server.tool(
   "nutrition_barcode",
-  "Look up a food by barcode (UPC-A 12-digit or EAN-13). Searches local database first, then USDA API.",
+  "Look up a food by barcode (UPC-A 12-digit or EAN-13). Returns data scaled to the serving (check `basis`/`basis_weight_g`; `per_100g` always has the canonical values too) and, if a correction exists for this barcode, returns the correction rather than the original. Searches local database first, then USDA API.",
   {
     barcode: z.string().describe("Barcode (12 or 13 digits)"),
   },
@@ -148,6 +149,8 @@ server.tool(
       labels: null,
       ingredients: null,
       data_source: JSON.stringify({ source: "web", url: source_url }),
+      is_correction: 0,
+      verified_fields: null,
     });
 
     return {
@@ -180,23 +183,49 @@ server.tool(
 
 server.tool(
   "nutrition_override",
-  "Override nutrition data for an existing food entry. Creates a corrected copy as a web-tier entry, preserving the original. Useful when USDA or local data is inaccurate.",
+  "Correct nutrition data for an existing food entry, e.g. from a physical label. Creates a corrected copy as a web-tier entry, preserving the original; repeated corrections of the same food update that entry. Defaults to per-serving input (basis: \"per_serving\") since that's what a physical label shows — pass the label's serving_weight_g and the label's numbers as-is, no need to divide by hand. Use basis: \"per_100g\" only if you already have per-100g values.",
   {
-    id: z.string().describe("ID of the food to override"),
+    id: z.string().describe("ID of the food to correct"),
     name: z.string().optional().describe("Corrected name"),
     brand: z.string().optional().describe("Corrected brand"),
-    calories: z.number().optional().describe("Corrected calories per 100g"),
-    protein: z.number().optional().describe("Corrected protein g per 100g"),
-    fat: z.number().optional().describe("Corrected fat g per 100g"),
-    carbs: z.number().optional().describe("Corrected carbs g per 100g"),
-    fiber: z.number().optional().describe("Corrected fiber g per 100g"),
-    sugar: z.number().optional().describe("Corrected sugar g per 100g"),
-    sodium: z.number().optional().describe("Corrected sodium mg per 100g"),
-    serving_size: z.string().optional().describe("Corrected serving size"),
-    serving_weight_g: z.number().optional().describe("Corrected serving weight in grams"),
+    basis: z
+      .enum(["per_serving", "per_100g"])
+      .default("per_serving")
+      .describe(
+        "Whether calories/protein/fat/carbs/fiber/sugar/sodium below are per-serving (the label case — requires serving_weight_g) or already per-100g."
+      ),
+    calories: z.number().optional().describe("Corrected calories, per basis"),
+    protein: z.number().optional().describe("Corrected protein g, per basis"),
+    fat: z.number().optional().describe("Corrected fat g, per basis"),
+    carbs: z.number().optional().describe("Corrected carbs g, per basis"),
+    fiber: z.number().optional().describe("Corrected fiber g, per basis"),
+    sugar: z.number().optional().describe("Corrected sugar g, per basis"),
+    sodium: z.number().optional().describe("Corrected sodium mg, per basis"),
+    serving_size: z.string().optional().describe("Corrected serving size description"),
+    serving_weight_g: z
+      .number()
+      .positive()
+      .optional()
+      .describe(
+        "Corrected serving weight in grams. REQUIRED when basis is \"per_serving\" and any macro field is supplied — never inherited from the existing row, since the stored weight may be exactly what's wrong."
+      ),
   },
-  async ({ id, ...fields }) => {
-    const result = store.override(id, fields);
+  async ({ id, basis, serving_weight_g, ...fields }) => {
+    const resolved = resolveOverrideInput(basis, serving_weight_g, fields);
+    if (!resolved.ok) {
+      return {
+        content: [{ type: "text" as const, text: resolved.error }],
+        isError: true,
+      };
+    }
+
+    const result = store.override(id, {
+      name: fields.name,
+      brand: fields.brand,
+      serving_size: fields.serving_size,
+      ...resolved.converted,
+      ...(serving_weight_g !== undefined ? { serving_weight_g } : {}),
+    });
     if (!result.overridden) {
       return {
         content: [{ type: "text" as const, text: result.reason ?? "Override failed" }],
@@ -205,7 +234,7 @@ server.tool(
     }
     return {
       content: [
-        { type: "text" as const, text: `Created override ${result.override_id} for ${id}` },
+        { type: "text" as const, text: `Created/updated correction ${result.override_id} for ${id}` },
       ],
     };
   }
@@ -246,7 +275,7 @@ server.tool(
 
 server.tool(
   "nutrition_cache_list",
-  "List cached food entries (USDA and web-sourced). Shows what has been cached from API lookups, web searches, and manual additions. Does not include the local OpenNutrition dataset.",
+  "List cached food entries (USDA and web-sourced). Shows what has been cached from API lookups, web searches, and manual additions. Values are scaled per `basis` like other read tools; corrections (`is_correction: true`) are listed ahead of the rows they correct. Does not include the local OpenNutrition dataset.",
   {
     tier: z.enum(["usda", "web", "all"]).default("all").describe("Filter by source tier"),
     limit: z.number().min(1).max(100).default(20).describe("Page size"),
