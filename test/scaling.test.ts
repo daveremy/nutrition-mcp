@@ -18,7 +18,7 @@ function rawRow(overrides: Partial<RawFoodRow> = {}): RawFoodRow {
 
 describe("scaling — the bug this issue fixes", () => {
   describe("real regression fixtures (physical labels as ground truth)", () => {
-    it("Chobani Vanilla Nonfat Greek Yogurt (170g): 76/8.24 per 100g -> 130/14 per serving", () => {
+    it("Chobani Vanilla Nonfat Greek Yogurt (170g): 76/8.24 per 100g -> 129/14 per serving (label: 130/14)", () => {
       const row = rawRow({
         id: "on_fd_nuJTMSjBaTjf",
         name: "Chobani Vanilla Nonfat Greek Yogurt",
