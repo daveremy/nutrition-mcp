@@ -2,8 +2,19 @@ import crypto from "node:crypto";
 
 import Database from "better-sqlite3";
 
-import type { FoodItem, SearchResult, CacheStats } from "./types.js";
+import type { FoodItem, RawFoodRow, SearchResult, CacheStats } from "./types.js";
+import { MACRO_FIELDS } from "./types.js";
+import { toFoodResponse, toSearchResponse } from "./scaling.js";
+import type { FoodResponse, SearchResponse } from "./types.js";
 import { getDbPath } from "./utils.js";
+
+// Derived (query-time) column: the id of the correction that supersedes a given row, or NULL.
+// Reuses the existing `source_id = 'override:<id>'` convention `override()` already writes —
+// one convention, read from two angles (is_correction on the correction itself, superseded_by on
+// the row it corrects). References the outer row as `f.id`, so every query using it must alias
+// the outer `foods` table as `f`.
+const SUPERSEDED_BY_SQL =
+  "(SELECT o.id FROM foods o WHERE o.source_tier = 'web' AND o.source_id = 'override:' || f.id LIMIT 1) AS superseded_by";
 
 const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS foods (
@@ -28,6 +39,8 @@ CREATE TABLE IF NOT EXISTS foods (
   labels TEXT,
   ingredients TEXT,
   data_source TEXT,
+  is_correction INTEGER NOT NULL DEFAULT 0,
+  verified_fields TEXT,
   cached_at TEXT DEFAULT (datetime('now')),
   updated_at TEXT DEFAULT (datetime('now')),
   UNIQUE(source_tier, source_id)
@@ -80,10 +93,36 @@ export class NutritionStore {
     db.pragma("journal_mode = WAL");
     db.pragma("foreign_keys = ON");
     db.exec(SCHEMA_SQL);
+    this.migrateSchema(db);
     return db;
   }
 
-  search(query: string, limit: number = 10): SearchResult[] {
+  /**
+   * Idempotent, additive-only migration for DBs created before is_correction/verified_fields
+   * existed (CREATE TABLE IF NOT EXISTS does not add columns to an already-existing table). Safe
+   * to run against the live 232MB production DB: no rows are rewritten or dropped, only two
+   * nullable/defaulted columns are added, wrapped in a transaction so it never half-applies.
+   */
+  private migrateSchema(db: Database.Database): void {
+    const migrate = db.transaction(() => {
+      const columns = db.prepare("PRAGMA table_info(foods)").all() as Array<{ name: string }>;
+      const existing = new Set(columns.map((c) => c.name));
+
+      if (!existing.has("is_correction")) {
+        db.exec("ALTER TABLE foods ADD COLUMN is_correction INTEGER NOT NULL DEFAULT 0");
+        // Deterministic backfill, not a guess: source_id = 'override:<id>' is the pre-existing
+        // convention override() already writes, so this retroactively flags already-existing
+        // overrides (e.g. a prior correction) as corrections without anyone re-running anything.
+        db.exec("UPDATE foods SET is_correction = 1 WHERE source_id LIKE 'override:%'");
+      }
+      if (!existing.has("verified_fields")) {
+        db.exec("ALTER TABLE foods ADD COLUMN verified_fields TEXT");
+      }
+    });
+    migrate();
+  }
+
+  search(query: string, limit: number = 10): SearchResponse[] {
     // Sanitize FTS query: strip operators, add prefix matching
     const sanitized = query
       .replace(/[*"(){}[\]^~\\|<>:@!&]/g, "")
@@ -95,7 +134,8 @@ export class NutritionStore {
 
     const stmt = this.db.prepare(`
       SELECT f.id, f.name, f.brand, f.calories, f.protein, f.fat, f.carbs,
-             f.serving_size, f.source_tier
+             f.serving_size, f.serving_weight_g, f.source_tier, f.is_correction,
+             f.verified_fields, ${SUPERSEDED_BY_SQL}
       FROM foods_fts fts
       JOIN foods f ON f.rowid = fts.rowid
       WHERE foods_fts MATCH ?
@@ -103,19 +143,51 @@ export class NutritionStore {
       LIMIT ?
     `);
 
-    return stmt.all(ftsQuery, limit) as SearchResult[];
+    const rows = stmt.all(ftsQuery, limit) as SearchResult[];
+    return rows.map(toSearchResponse);
   }
 
-  lookup(id: string): FoodItem | null {
+  /** Raw canonical row, no response shaping — for internal engine use (e.g. override()
+   *  inheritance) that must never see serving-scaled values. */
+  private getRawRow(id: string): FoodItem | null {
     const stmt = this.db.prepare("SELECT * FROM foods WHERE id = ?");
     return (stmt.get(id) as FoodItem) ?? null;
   }
 
-  lookupByBarcode(barcode: string): FoodItem | null {
+  /**
+   * The id of the correction that supersedes `id`, or null. Exposed for callers (the search
+   * orchestrator's freshly-fetched-USDA path) that build a response from an in-memory object
+   * rather than a full row read, so they still reflect a pre-existing correction rather than
+   * silently assuming none exists.
+   */
+  findSupersededBy(id: string): string | null {
     const stmt = this.db.prepare(
-      "SELECT * FROM foods WHERE ean_13 = ? ORDER BY CASE source_tier WHEN 'local' THEN 0 WHEN 'usda' THEN 1 ELSE 2 END LIMIT 1"
+      "SELECT id FROM foods WHERE source_tier = 'web' AND source_id = 'override:' || ? LIMIT 1"
     );
-    return (stmt.get(barcode) as FoodItem) ?? null;
+    const row = stmt.get(id) as { id: string } | undefined;
+    return row?.id ?? null;
+  }
+
+  lookup(id: string): FoodResponse | null {
+    const stmt = this.db.prepare(
+      `SELECT f.*, ${SUPERSEDED_BY_SQL} FROM foods f WHERE f.id = ?`
+    );
+    const row = (stmt.get(id) as RawFoodRow) ?? null;
+    return row ? toFoodResponse(row) : null;
+  }
+
+  lookupByBarcode(barcode: string): FoodResponse | null {
+    // Severest fix (review finding R2): a correction is always source_tier='web', so ordering by
+    // tier alone put it BEHIND the row it corrects — the correction silently never applied.
+    // is_correction now ranks first regardless of tier; tier order is only the tiebreak.
+    const stmt = this.db.prepare(
+      `SELECT f.*, ${SUPERSEDED_BY_SQL} FROM foods f WHERE f.ean_13 = ?
+       ORDER BY CASE WHEN f.is_correction = 1 THEN 0 ELSE 1 END,
+                CASE f.source_tier WHEN 'local' THEN 0 WHEN 'usda' THEN 1 ELSE 2 END
+       LIMIT 1`
+    );
+    const row = (stmt.get(barcode) as RawFoodRow) ?? null;
+    return row ? toFoodResponse(row) : null;
   }
 
   upsert(food: Omit<FoodItem, "cached_at" | "updated_at">): void {
@@ -123,11 +195,11 @@ export class NutritionStore {
       INSERT INTO foods (id, name, brand, type, ean_13, source_tier, source_id,
         source_query, calories, protein, fat, carbs, fiber, sugar, sodium,
         serving_size, serving_weight_g, alternate_names_text, labels,
-        ingredients, data_source)
+        ingredients, data_source, is_correction, verified_fields)
       VALUES (@id, @name, @brand, @type, @ean_13, @source_tier, @source_id,
         @source_query, @calories, @protein, @fat, @carbs, @fiber, @sugar, @sodium,
         @serving_size, @serving_weight_g, @alternate_names_text, @labels,
-        @ingredients, @data_source)
+        @ingredients, @data_source, @is_correction, @verified_fields)
       ON CONFLICT(source_tier, source_id) DO UPDATE SET
         name = COALESCE(excluded.name, foods.name),
         brand = COALESCE(excluded.brand, foods.brand),
@@ -146,6 +218,14 @@ export class NutritionStore {
         labels = COALESCE(excluded.labels, foods.labels),
         ingredients = COALESCE(excluded.ingredients, foods.ingredients),
         data_source = COALESCE(excluded.data_source, foods.data_source),
+        -- Only override() ever writes to the ('web', 'override:<id>') composite key, so no other
+        -- upsert caller's conflict path can collide with an override row: safe to overwrite
+        -- directly rather than COALESCE (is_correction is NOT NULL, excluded is never actually
+        -- missing information here).
+        is_correction = excluded.is_correction,
+        -- Non-override callers always pass verified_fields: null, meaning "don't touch"; override()
+        -- always passes its own pre-merged full array (never null) when updating it.
+        verified_fields = COALESCE(excluded.verified_fields, foods.verified_fields),
         updated_at = datetime('now')
     `);
 
@@ -159,11 +239,11 @@ export class NutritionStore {
       INSERT OR IGNORE INTO foods (id, name, brand, type, ean_13, source_tier, source_id,
         source_query, calories, protein, fat, carbs, fiber, sugar, sodium,
         serving_size, serving_weight_g, alternate_names_text, labels,
-        ingredients, data_source)
+        ingredients, data_source, is_correction, verified_fields)
       VALUES (@id, @name, @brand, @type, @ean_13, @source_tier, @source_id,
         @source_query, @calories, @protein, @fat, @carbs, @fiber, @sugar, @sodium,
         @serving_size, @serving_weight_g, @alternate_names_text, @labels,
-        @ingredients, @data_source)
+        @ingredients, @data_source, @is_correction, @verified_fields)
     `);
 
     const tx = this.db.transaction((items: typeof foods) => {
@@ -203,19 +283,22 @@ export class NutritionStore {
     return { total, by_tier, last_cached_at: lastCached };
   }
 
-  listCached(tier: "usda" | "web" | "all" = "all", limit: number = 20, offset: number = 0): SearchResult[] {
+  listCached(tier: "usda" | "web" | "all" = "all", limit: number = 20, offset: number = 0): SearchResponse[] {
     const where = tier === "all"
-      ? "WHERE source_tier IN ('usda', 'web')"
-      : "WHERE source_tier = ?";
+      ? "WHERE f.source_tier IN ('usda', 'web')"
+      : "WHERE f.source_tier = ?";
     const stmt = this.db.prepare(`
-      SELECT id, name, brand, calories, protein, fat, carbs, serving_size, source_tier
-      FROM foods
+      SELECT f.id, f.name, f.brand, f.calories, f.protein, f.fat, f.carbs,
+             f.serving_size, f.serving_weight_g, f.source_tier, f.is_correction,
+             f.verified_fields, ${SUPERSEDED_BY_SQL}
+      FROM foods f
       ${where}
-      ORDER BY updated_at DESC
+      ORDER BY (CASE WHEN f.is_correction = 1 THEN 0 ELSE 1 END), f.updated_at DESC
       LIMIT ? OFFSET ?
     `);
     const params = tier === "all" ? [limit, offset] : [tier, limit, offset];
-    return stmt.all(...params) as SearchResult[];
+    const rows = stmt.all(...params) as SearchResult[];
+    return rows.map(toSearchResponse);
   }
 
   delete(id: string): { deleted: boolean; reason?: string } {
@@ -231,42 +314,90 @@ export class NutritionStore {
     return { deleted: true };
   }
 
+  private getRawRowBySourceId(sourceTier: string, sourceId: string): FoodItem | null {
+    const stmt = this.db.prepare(
+      "SELECT * FROM foods WHERE source_tier = ? AND source_id = ?"
+    );
+    return (stmt.get(sourceTier, sourceId) as FoodItem) ?? null;
+  }
+
   override(
     id: string,
     fields: Partial<Pick<FoodItem, "name" | "brand" | "calories" | "protein" | "fat" | "carbs" | "fiber" | "sugar" | "sodium" | "serving_size" | "serving_weight_g">>
   ): { overridden: boolean; override_id?: string; reason?: string } {
-    const existing = this.lookup(id);
-    if (!existing) {
+    // Raw canonical read, never the public (serving-scaled) lookup() — inheriting a scaled
+    // per-serving value and writing it back as per-100g would corrupt exactly the class of data
+    // this fix exists to correct (review finding, plan review round 5).
+    const requested = this.getRawRow(id);
+    if (!requested) {
       return { overridden: false, reason: "Food not found" };
     }
 
-    // Create a web-tier override that inherits all fields from the original,
-    // with user-provided fields taking precedence
-    const overrideId = NutritionStore.generateId("web");
-    const overrideSourceId = `override:${id}`;
+    // Normalize to the TRUE original id before doing anything else (code review round 3, P2): if
+    // the caller passed the id of an existing correction — a realistic path now that barcode/
+    // search surface the correction's own id ahead of the original — resolve back to what it
+    // corrects. Without this, a second correction chains onto the first
+    // (source_id: "override:<correction_id>" instead of "override:<original_id>"), producing two
+    // rows that tie on is_correction/source_tier and leave barcode/search precedence undefined.
+    const originalId =
+      requested.is_correction === 1 && requested.source_id.startsWith("override:")
+        ? requested.source_id.slice("override:".length)
+        : id;
+    // Re-fetch the true original when the caller's id was a correction; fall back to `requested`
+    // itself if the original row is somehow gone (e.g. deleted) — it still carries the same
+    // metadata fields, inherited verbatim when the correction was first created.
+    const existing = originalId === id ? requested : (this.getRawRow(originalId) ?? requested);
+
+    const overrideSourceId = `override:${originalId}`;
+    // Reuse the existing override row's id/verified_fields on a repeat correction (plan review
+    // round 5): a freshly generated id is never actually stored once ON CONFLICT fires (the
+    // primary key is never in the DO UPDATE SET list), so returning a new id every time silently
+    // pointed callers at an id that was never written. Also required for the verified_fields
+    // union below — a field verified in an earlier call must not become "unverified" because a
+    // later call corrects a different field.
+    const priorOverride = this.getRawRowBySourceId("web", overrideSourceId);
+    const overrideId = priorOverride?.id ?? NutritionStore.generateId("web");
+
+    const suppliedMacroFields = MACRO_FIELDS.filter((field) => fields[field] !== undefined);
+    const priorVerified: string[] = priorOverride?.verified_fields
+      ? JSON.parse(priorOverride.verified_fields)
+      : [];
+    const mergedVerified = Array.from(new Set([...priorVerified, ...suppliedMacroFields]));
+
+    // Unspecified fields inherit from the PRIOR OVERRIDE when one exists, not from the pristine
+    // original — otherwise a second partial correction silently reverts every field it doesn't
+    // touch back to the uncorrected original value, while verified_fields still (correctly)
+    // claims that field is verified (code review round 2, P1: "correcting calories first and
+    // protein later resets calories back to the original value"). Metadata fields that the
+    // override tool never lets a caller change (type, ean_13, source_query,
+    // alternate_names_text, labels, ingredients) still come from `existing` — they're identical
+    // between existing and priorOverride by construction, so this is just the simpler read.
+    const inheritFrom = priorOverride ?? existing;
 
     this.upsert({
       id: overrideId,
-      name: fields.name ?? existing.name,
-      brand: fields.brand ?? existing.brand,
+      name: fields.name ?? inheritFrom.name,
+      brand: fields.brand ?? inheritFrom.brand,
       type: existing.type,
       ean_13: existing.ean_13,
       source_tier: "web",
       source_id: overrideSourceId,
       source_query: existing.source_query,
-      calories: fields.calories ?? existing.calories,
-      protein: fields.protein ?? existing.protein,
-      fat: fields.fat ?? existing.fat,
-      carbs: fields.carbs ?? existing.carbs,
-      fiber: fields.fiber ?? existing.fiber,
-      sugar: fields.sugar ?? existing.sugar,
-      sodium: fields.sodium ?? existing.sodium,
-      serving_size: fields.serving_size ?? existing.serving_size,
-      serving_weight_g: fields.serving_weight_g ?? existing.serving_weight_g,
+      calories: fields.calories ?? inheritFrom.calories,
+      protein: fields.protein ?? inheritFrom.protein,
+      fat: fields.fat ?? inheritFrom.fat,
+      carbs: fields.carbs ?? inheritFrom.carbs,
+      fiber: fields.fiber ?? inheritFrom.fiber,
+      sugar: fields.sugar ?? inheritFrom.sugar,
+      sodium: fields.sodium ?? inheritFrom.sodium,
+      serving_size: fields.serving_size ?? inheritFrom.serving_size,
+      serving_weight_g: fields.serving_weight_g ?? inheritFrom.serving_weight_g,
       alternate_names_text: existing.alternate_names_text,
       labels: existing.labels,
       ingredients: existing.ingredients,
-      data_source: JSON.stringify({ source: "override", original_id: id }),
+      data_source: JSON.stringify({ source: "override", original_id: originalId }),
+      is_correction: 1,
+      verified_fields: mergedVerified.length > 0 ? JSON.stringify(mergedVerified) : null,
     });
 
     return { overridden: true, override_id: overrideId };

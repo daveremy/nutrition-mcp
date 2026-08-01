@@ -1,11 +1,23 @@
 {
   "name": "nutrition-mcp",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "description": "3-tier nutrition lookup MCP server with local SQLite caching",
   "type": "module",
   "main": "dist/mcp.js",
   "bin": {
     "nutrition-mcp": "dist/cli.js"
+  },
+  "author": "Dave Remy",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/daveremy/nutrition-mcp.git"
+  },
+  "homepage": "https://github.com/daveremy/nutrition-mcp#readme",
+  "bugs": {
+    "url": "https://github.com/daveremy/nutrition-mcp/issues"
+  },
+  "engines": {
+    "node": ">=20"
   },
   "scripts": {
     "build": "tsc",

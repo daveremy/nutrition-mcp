@@ -73,7 +73,7 @@ program
     await startServer();
   });
 
-function fmt(n: number | null): string {
+function fmt(n: number | null | undefined): string {
   return n != null ? n.toFixed(1) : "-";
 }
 

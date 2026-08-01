@@ -1,12 +1,13 @@
-import type { FoodItem, SearchResult } from "./types.js";
+import type { FoodResponse, SearchResponse } from "./types.js";
 import { NutritionStore } from "./store.js";
 import { searchUsda, lookupBarcodeUsda } from "./client.js";
+import { toSearchResponse } from "./scaling.js";
 import { normalizeBarcode } from "./utils.js";
 
 export class SearchOrchestrator {
   constructor(private store: NutritionStore) {}
 
-  async search(query: string, limit: number = 10): Promise<SearchResult[]> {
+  async search(query: string, limit: number = 10): Promise<SearchResponse[]> {
     // Tier 1: local FTS search
     const localResults = this.store.search(query, limit);
 
@@ -41,23 +42,37 @@ export class SearchOrchestrator {
       // Cache non-duplicate USDA results for future searches
       this.store.upsert(food);
 
-      combined.push({
-        id: food.id,
-        name: food.name,
-        brand: food.brand,
-        calories: food.calories,
-        protein: food.protein,
-        fat: food.fat,
-        carbs: food.carbs,
-        serving_size: food.serving_size,
-        source_tier: food.source_tier,
-      });
+      // Run the freshly-fetched item through the same shared scaling helper every other read
+      // path uses, rather than hand-picking raw (unscaled) fields — otherwise the *first* time a
+      // USDA item is searched (before it's cached and re-read on a later search) it would ship
+      // unscaled, bypassing the fix entirely for that one response (plan review round 1, P1).
+      combined.push(
+        toSearchResponse({
+          id: food.id,
+          name: food.name,
+          brand: food.brand,
+          calories: food.calories,
+          protein: food.protein,
+          fat: food.fat,
+          carbs: food.carbs,
+          serving_size: food.serving_size,
+          serving_weight_g: food.serving_weight_g,
+          source_tier: food.source_tier,
+          is_correction: food.is_correction,
+          verified_fields: food.verified_fields,
+          // A pre-existing correction for this exact id is a narrow edge case (the id was
+          // previously cached + corrected, then didn't rank in this query's top-`limit` local
+          // results, so it fell through to a fresh USDA re-fetch here) — but real, so it's
+          // checked explicitly rather than assumed absent.
+          superseded_by: this.store.findSupersededBy(food.id),
+        })
+      );
     }
 
     return combined.slice(0, limit);
   }
 
-  async lookupBarcode(barcode: string): Promise<FoodItem | null> {
+  async lookupBarcode(barcode: string): Promise<FoodResponse | null> {
     const normalized = normalizeBarcode(barcode);
     if (!normalized) return null;
 
