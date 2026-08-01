@@ -328,12 +328,27 @@ export class NutritionStore {
     // Raw canonical read, never the public (serving-scaled) lookup() — inheriting a scaled
     // per-serving value and writing it back as per-100g would corrupt exactly the class of data
     // this fix exists to correct (review finding, plan review round 5).
-    const existing = this.getRawRow(id);
-    if (!existing) {
+    const requested = this.getRawRow(id);
+    if (!requested) {
       return { overridden: false, reason: "Food not found" };
     }
 
-    const overrideSourceId = `override:${id}`;
+    // Normalize to the TRUE original id before doing anything else (code review round 3, P2): if
+    // the caller passed the id of an existing correction — a realistic path now that barcode/
+    // search surface the correction's own id ahead of the original — resolve back to what it
+    // corrects. Without this, a second correction chains onto the first
+    // (source_id: "override:<correction_id>" instead of "override:<original_id>"), producing two
+    // rows that tie on is_correction/source_tier and leave barcode/search precedence undefined.
+    const originalId =
+      requested.is_correction === 1 && requested.source_id.startsWith("override:")
+        ? requested.source_id.slice("override:".length)
+        : id;
+    // Re-fetch the true original when the caller's id was a correction; fall back to `requested`
+    // itself if the original row is somehow gone (e.g. deleted) — it still carries the same
+    // metadata fields, inherited verbatim when the correction was first created.
+    const existing = originalId === id ? requested : (this.getRawRow(originalId) ?? requested);
+
+    const overrideSourceId = `override:${originalId}`;
     // Reuse the existing override row's id/verified_fields on a repeat correction (plan review
     // round 5): a freshly generated id is never actually stored once ON CONFLICT fires (the
     // primary key is never in the DO UPDATE SET list), so returning a new id every time silently
@@ -380,7 +395,7 @@ export class NutritionStore {
       alternate_names_text: existing.alternate_names_text,
       labels: existing.labels,
       ingredients: existing.ingredients,
-      data_source: JSON.stringify({ source: "override", original_id: id }),
+      data_source: JSON.stringify({ source: "override", original_id: originalId }),
       is_correction: 1,
       verified_fields: mergedVerified.length > 0 ? JSON.stringify(mergedVerified) : null,
     });

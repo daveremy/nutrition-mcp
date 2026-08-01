@@ -362,6 +362,41 @@ describe("NutritionStore", () => {
       assert.equal(override.per_100g.protein, 15);
     });
 
+    it("collapses into ONE correction even when re-called with the correction's own id (code review round 3, P2)", () => {
+      // Realistic path: barcode/lookup now surface the correction ahead of the original, so a
+      // caller correcting "the id I just looked up" may pass the correction's id, not the
+      // original's. That must not chain into a second competing correction row.
+      store.upsert(makeFoodItem({
+        id: "usda_chain_orig",
+        name: "Chain Test Food",
+        source_tier: "usda",
+        source_id: "chain1",
+        calories: 100,
+        protein: 10,
+        serving_weight_g: 100,
+      }));
+
+      const r1 = store.override("usda_chain_orig", { calories: 150 });
+      assert.ok(r1.override_id);
+
+      // Second correction, called with the CORRECTION's id (not the original's).
+      const r2 = store.override(r1.override_id!, { protein: 20 });
+      assert.equal(r2.overridden, true);
+      assert.equal(r2.override_id, r1.override_id); // same row, not a new chained one
+
+      const override = store.lookup(r1.override_id!);
+      assert.ok(override);
+      assert.equal(override.per_100g.calories, 150); // round 1's correction preserved
+      assert.equal(override.per_100g.protein, 20); // round 2's correction applied
+      assert.deepEqual(new Set(override.verified_fields ?? []), new Set(["calories", "protein"]));
+
+      // Exactly one correction row exists for this food — barcode/search precedence stays
+      // unambiguous (no two is_correction=1 rows tied for the same original).
+      const original = store.lookup("usda_chain_orig");
+      assert.ok(original);
+      assert.equal(original.superseded_by, r1.override_id);
+    });
+
     it("override inherits barcode from original", () => {
       store.upsert(makeFoodItem({
         id: "usda_bc_override",
