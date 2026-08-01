@@ -96,10 +96,13 @@ If `serving_weight_g` isn't stored for a food, the server tries to derive it by 
 `serving_size` (e.g. `"42GRM"` -> 42g, `"8 oz"` -> 226.8g, `"1 cup"` -> 240g assuming
 water-like density) before falling back to `per_100g`. `weight_source` tells you which:
 `"column"` (stated) and `"parsed_grams"`/`"parsed_mass"` (deterministic) are as trustworthy as
-a stated weight; `"parsed_volume"` assumes 1.0 g/mL density and is wrong for oils/honey — see
+a stated weight; `"parsed_volume"` assumes 1.0 g/mL density, so treat it more cautiously — and
+note that foods matching an oil/honey/syrup-class name never get a `parsed_volume` weight at
+all (a 1.0 g/mL guess is wrong enough there that they fall back to `per_100g` instead) — see
 [docs/CALLER-GUIDE.md](docs/CALLER-GUIDE.md). Only when no weight can be resolved at all (e.g.
-`serving_size: "1 bottle"`) does `basis` fall back to `"per_100g"`, with the headline values
-being the canonical per-100g numbers — never silently mislabeled as a serving. `per_100g` is
+`serving_size: "1 bottle"`, or an oil/honey-class food with only a volumetric serving size)
+does `basis` fall back to `"per_100g"`, with the headline values being the canonical per-100g
+numbers — never silently mislabeled as a serving. `per_100g` is
 always present regardless of basis. See docs/CALLER-GUIDE.md for how to use `basis`,
 `weight_source`, `atwater_delta_pct`, `is_correction`, and `superseded_by`.
 

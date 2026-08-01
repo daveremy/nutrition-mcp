@@ -43,7 +43,7 @@ const server = new McpServer({
 
 server.tool(
   "nutrition_search",
-  "Search for foods by name. Returns matching foods with macros (calories, protein, fat, carbs) scaled to the food's serving — check the `basis` field (\"per_serving\" vs \"per_100g\") on every result, it is never implied. `weight_source` (\"column\" | \"parsed_grams\" | \"parsed_mass\" | \"parsed_volume\") tells you whether the serving weight was stated or derived; `parsed_volume` assumes water-like density and is wrong for oils/honey. `per_100g` on each result carries the canonical values regardless of basis. `is_correction`/`superseded_by`/`verified_fields` signal trust; see docs/CALLER-GUIDE.md. Searches local database first, then USDA API.",
+  "Search for foods by name. Returns matching foods with macros (calories, protein, fat, carbs) scaled to the food's serving — check the `basis` field (\"per_serving\" vs \"per_100g\") on every result, it is never implied. `weight_source` (\"column\" | \"parsed_grams\" | \"parsed_mass\" | \"parsed_volume\") tells you whether the serving weight was stated or derived; `parsed_volume` assumes water-like density, so treat it more cautiously than the other three (oils/honey/syrup are excluded from it entirely and stay `per_100g` instead). `per_100g` on each result carries the canonical values regardless of basis. `is_correction`/`superseded_by`/`verified_fields` signal trust; see docs/CALLER-GUIDE.md. Searches local database first, then USDA API.",
   {
     query: z.string().describe("Food name to search for"),
     limit: z.number().min(1).max(50).default(10).describe("Max results to return"),
