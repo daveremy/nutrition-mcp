@@ -355,6 +355,11 @@ describe("NutritionStore", () => {
       assert.ok(override);
       // Round 1 verified "calories" must not be dropped just because round 2 verified "protein".
       assert.deepEqual(new Set(override.verified_fields ?? []), new Set(["calories", "protein"]));
+      // Code review round 2, P1: round 1's corrected calories=150 must survive round 2 (which
+      // only supplied protein) — round 2 must inherit from the PRIOR override, not revert
+      // unspecified fields back to the pristine original's calories=100.
+      assert.equal(override.per_100g.calories, 150);
+      assert.equal(override.per_100g.protein, 15);
     });
 
     it("override inherits barcode from original", () => {

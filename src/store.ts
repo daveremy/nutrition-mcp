@@ -349,24 +349,34 @@ export class NutritionStore {
       : [];
     const mergedVerified = Array.from(new Set([...priorVerified, ...suppliedMacroFields]));
 
+    // Unspecified fields inherit from the PRIOR OVERRIDE when one exists, not from the pristine
+    // original — otherwise a second partial correction silently reverts every field it doesn't
+    // touch back to the uncorrected original value, while verified_fields still (correctly)
+    // claims that field is verified (code review round 2, P1: "correcting calories first and
+    // protein later resets calories back to the original value"). Metadata fields that the
+    // override tool never lets a caller change (type, ean_13, source_query,
+    // alternate_names_text, labels, ingredients) still come from `existing` — they're identical
+    // between existing and priorOverride by construction, so this is just the simpler read.
+    const inheritFrom = priorOverride ?? existing;
+
     this.upsert({
       id: overrideId,
-      name: fields.name ?? existing.name,
-      brand: fields.brand ?? existing.brand,
+      name: fields.name ?? inheritFrom.name,
+      brand: fields.brand ?? inheritFrom.brand,
       type: existing.type,
       ean_13: existing.ean_13,
       source_tier: "web",
       source_id: overrideSourceId,
       source_query: existing.source_query,
-      calories: fields.calories ?? existing.calories,
-      protein: fields.protein ?? existing.protein,
-      fat: fields.fat ?? existing.fat,
-      carbs: fields.carbs ?? existing.carbs,
-      fiber: fields.fiber ?? existing.fiber,
-      sugar: fields.sugar ?? existing.sugar,
-      sodium: fields.sodium ?? existing.sodium,
-      serving_size: fields.serving_size ?? existing.serving_size,
-      serving_weight_g: fields.serving_weight_g ?? existing.serving_weight_g,
+      calories: fields.calories ?? inheritFrom.calories,
+      protein: fields.protein ?? inheritFrom.protein,
+      fat: fields.fat ?? inheritFrom.fat,
+      carbs: fields.carbs ?? inheritFrom.carbs,
+      fiber: fields.fiber ?? inheritFrom.fiber,
+      sugar: fields.sugar ?? inheritFrom.sugar,
+      sodium: fields.sodium ?? inheritFrom.sodium,
+      serving_size: fields.serving_size ?? inheritFrom.serving_size,
+      serving_weight_g: fields.serving_weight_g ?? inheritFrom.serving_weight_g,
       alternate_names_text: existing.alternate_names_text,
       labels: existing.labels,
       ingredients: existing.ingredients,
