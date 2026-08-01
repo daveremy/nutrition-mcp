@@ -1,7 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 
-import { parseServingWeight } from "../src/serving-parse.js";
+import { parseServingWeight, isDensitySensitiveFood } from "../src/serving-parse.js";
 
 describe("parseServingWeight — #5, tiered derivation from serving_size", () => {
   describe("Tier A — explicit grams (zero ambiguity)", () => {
@@ -92,6 +92,36 @@ describe("parseServingWeight — #5, tiered derivation from serving_size", () =>
     it("returns null for zero or unparseable numbers", () => {
       assert.equal(parseServingWeight("0 g"), null);
       assert.equal(parseServingWeight("some words"), null);
+    });
+  });
+
+  describe("isDensitySensitiveFood — gates Tier C for known-wrong-at-1.0-g/mL categories", () => {
+    it("flags the issue's named categories: oil, honey, and near-synonyms", () => {
+      assert.equal(isDensitySensitiveFood("Extra Virgin Olive Oil"), true);
+      assert.equal(isDensitySensitiveFood("Wildflower Honey"), true);
+      assert.equal(isDensitySensitiveFood("Maple Syrup"), true);
+      assert.equal(isDensitySensitiveFood("Blackstrap Molasses"), true);
+      assert.equal(isDensitySensitiveFood("Salted Butter"), true);
+      assert.equal(isDensitySensitiveFood("Vegetable Shortening"), true);
+    });
+
+    it("is case-insensitive and matches whole words only", () => {
+      assert.equal(isDensitySensitiveFood("olive oil"), true);
+      assert.equal(isDensitySensitiveFood("OLIVE OIL"), true);
+      // "boiled" contains "oil" as a substring but not as a whole word.
+      assert.equal(isDensitySensitiveFood("Boiled Eggs"), false);
+    });
+
+    it("does not flag water-like liquids or unrelated foods", () => {
+      assert.equal(isDensitySensitiveFood("Whole Milk"), false);
+      assert.equal(isDensitySensitiveFood("Orange Juice"), false);
+      assert.equal(isDensitySensitiveFood("Chicken Broth"), false);
+      assert.equal(isDensitySensitiveFood("Greek Yogurt"), false);
+    });
+
+    it("returns false for null/undefined names", () => {
+      assert.equal(isDensitySensitiveFood(null), false);
+      assert.equal(isDensitySensitiveFood(undefined), false);
     });
   });
 

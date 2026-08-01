@@ -257,6 +257,68 @@ describe("scaling — the bug this issue fixes", () => {
       }
     });
 
+    it("Bertolli Organic Extra Virgin Olive Oil: Tier C is gated, falls back to per_100g honestly (code review round 1, P1)", () => {
+      // Empirically verified: naively applying 1.0 g/mL to this exact row (800 cal/93.3g fat
+      // per 100g, "1 tbsp" = 15 mL, NULL weight) gives 800 * 0.15 = 120 cal — which happens to
+      // match the physical label's 120 cal ONLY because the stored per-100g value (800) is
+      // itself under true olive oil's ~884 cal/100g; against a correctly-stored 884 cal/100g
+      // row, 1.0 g/mL over-reports by ~11% (133 vs label 120). The label's own numbers imply a
+      // density of ~0.90 g/mL (120 cal / 884 true cal-per-100g -> 13.6g per 15mL) — textbook
+      // olive oil is 0.91-0.92, confirming 1.0 is simply wrong for this category. Rather than
+      // encode a food-specific density table, oil (and honey/syrup/butter/etc.) is excluded
+      // from Tier C entirely and left as the honest per_100g fallback — conservative and
+      // explainable beats clever, per the issue's own standing rule.
+      const row = rawRow({
+        id: "on_bertolli_evoo",
+        name: "Organic Extra Virgin Olive Oil by Bertolli",
+        calories: 800,
+        fat: 93.3,
+        serving_weight_g: null,
+        serving_size: "1 tbsp",
+      });
+      const response = toFoodResponse(row);
+      assert.equal(response.basis, "per_100g");
+      assert.equal(response.basis_weight_g, null);
+      assert.equal(response.weight_source, null);
+      // Never over-reports: the headline value is the untouched per-100g number, not a
+      // density-guessed per-serving one.
+      assert.equal(response.calories, 800);
+      assert.equal(response.serving_size, "1 tbsp"); // never rewritten
+    });
+
+    it("Tier A/B (grams/mass) are NOT gated for density-sensitive foods — no assumption involved", () => {
+      // The gate only applies to Tier C (a density assumption). An explicit gram or mass
+      // string for an oil is exact, not a guess, so it must still be derived normally.
+      const gramsRow = rawRow({
+        name: "Extra Virgin Olive Oil",
+        serving_weight_g: null,
+        serving_size: "15GRM",
+        calories: 884,
+      });
+      assert.equal(toFoodResponse(gramsRow).weight_source, "parsed_grams");
+
+      const ozRow = rawRow({
+        name: "Wildflower Honey",
+        serving_weight_g: null,
+        serving_size: "8 oz",
+        calories: 304,
+      });
+      assert.equal(toFoodResponse(ozRow).weight_source, "parsed_mass");
+    });
+
+    it("water-like foods (broth, milk, juice) still get Tier C normally", () => {
+      const row = rawRow({
+        name: "Whole Milk",
+        serving_weight_g: null,
+        serving_size: "1 cup",
+        calories: 61,
+      });
+      const response = toFoodResponse(row);
+      assert.equal(response.basis, "per_serving");
+      assert.equal(response.weight_source, "parsed_volume");
+      assert.equal(response.basis_weight_g, 240);
+    });
+
     it("also applies to the lean SearchResponse shape (toSearchResponse)", () => {
       const row: SearchResult = {
         id: "s2",

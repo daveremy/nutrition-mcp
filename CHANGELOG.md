@@ -7,10 +7,13 @@
   instead of falling back to `basis: "per_100g"` and pushing the conversion onto the caller.
   Derivation is tiered by confidence: explicit grams and mass units (oz) are deterministic;
   volumetric units (ml, l, cup, tbsp, tsp, fl oz) assume water-like density (1.0 g/mL), which
-  is wrong for oils/honey. New `weight_source` field (`"column"` | `"parsed_grams"` |
-  `"parsed_mass"` | `"parsed_volume"`) on every result with a resolved weight discloses which
-  — see #5 and docs/CALLER-GUIDE.md. Strings that aren't confidently parseable (e.g. `"1
-  bottle"`, `"1 can"`) are left as `basis: "per_100g"`, unchanged from before.
+  is meaningfully wrong for oils/honey/syrups — foods matching those categories by name are
+  excluded from volumetric derivation entirely and fall back to the honest `per_100g` basis
+  instead of a confidently wrong number (verified against a real product: Bertolli Extra
+  Virgin Olive Oil). New `weight_source` field (`"column"` | `"parsed_grams"` | `"parsed_mass"`
+  | `"parsed_volume"`) on every result with a resolved weight discloses which — see #5 and
+  docs/CALLER-GUIDE.md. Strings that aren't confidently parseable (e.g. `"1 bottle"`, `"1
+  can"`) are left as `basis: "per_100g"`, unchanged from before.
 - Fix: `nutrition_search` no longer lets a `calories: null` row outrank a complete row for the
   same query — completeness (non-null calories) is now the primary sort key, with FTS
   relevance (`bm25`) as the tiebreak within each completeness bucket. See #6.

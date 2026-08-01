@@ -7,7 +7,7 @@ import type {
   WeightSource,
 } from "./types.js";
 import { MACRO_FIELDS } from "./types.js";
-import { parseServingWeight } from "./serving-parse.js";
+import { parseServingWeight, isDensitySensitiveFood } from "./serving-parse.js";
 import { roundTo } from "./utils.js";
 
 // Fields that are integer-ish in real-world label precision — 1 decimal place implies false
@@ -53,6 +53,7 @@ interface BasisInput {
   is_correction?: number;
   verified_fields?: string | null;
   superseded_by?: string | null;
+  name?: string;
 }
 
 interface BasisFields {
@@ -71,16 +72,27 @@ interface BasisFields {
  * column is always trusted first ("column"); only when it's NULL/0 do we fall back to parsing
  * `serving_size` (#5) — a derived weight must never silently look the same as a stated one, so
  * every non-null result reports which tier produced it.
+ *
+ * Tier C (volumetric) parses are suppressed for foods whose name matches a known
+ * density-sensitive category (oil, honey, syrup, etc.) — see `isDensitySensitiveFood` in
+ * serving-parse.ts. A 1.0 g/mL guess is wrong enough on those foods (an oil at 0.92 g/mL, honey
+ * at 1.4 g/mL) that the honest `per_100g` fallback is the safer default; unlike Tier A/B, Tier C
+ * involves an assumption, not a fact, so it's the only tier that gets gated (code review round
+ * 1, P1 — see /tmp/review-5/REVIEW.md).
  */
 function resolveWeight(
   servingWeightG: number | null | undefined,
-  servingSize: string | null | undefined
+  servingSize: string | null | undefined,
+  name: string | null | undefined
 ): { weight: number | null; weight_source: WeightSource | null } {
   if (servingWeightG != null && servingWeightG > 0) {
     return { weight: servingWeightG, weight_source: "column" };
   }
   const parsed = parseServingWeight(servingSize);
   if (parsed) {
+    if (parsed.weight_source === "parsed_volume" && isDensitySensitiveFood(name)) {
+      return { weight: null, weight_source: null };
+    }
     return { weight: parsed.weight_g, weight_source: parsed.weight_source };
   }
   return { weight: null, weight_source: null };
@@ -98,7 +110,7 @@ function resolveWeight(
 function computeBasis(
   row: BasisInput & Partial<Record<MacroField, number | null>>
 ): { fields: BasisFields; scaled: Partial<Record<MacroField, number | null>> } {
-  const { weight, weight_source } = resolveWeight(row.serving_weight_g, row.serving_size);
+  const { weight, weight_source } = resolveWeight(row.serving_weight_g, row.serving_size, row.name);
   const hasWeight = weight != null;
 
   const per100g: Partial<Record<MacroField, number | null>> = {};
