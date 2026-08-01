@@ -8,11 +8,7 @@ import type {
 } from "./types.js";
 import { MACRO_FIELDS } from "./types.js";
 import { parseServingWeight } from "./serving-parse.js";
-
-function roundTo(value: number, decimals: number): number {
-  const factor = 10 ** decimals;
-  return Math.round(value * factor) / factor;
-}
+import { roundTo } from "./utils.js";
 
 // Fields that are integer-ish in real-world label precision — 1 decimal place implies false
 // precision (sodium in mg, calories in kcal are never reported fractionally on a label).
@@ -71,14 +67,6 @@ interface BasisFields {
 }
 
 /**
- * The one shared scaling computation applied at every public read boundary (store.search,
- * store.lookup, store.lookupByBarcode, store.listCached, and the orchestrator's freshly-fetched
- * USDA path) so no read path can independently reinvent — or skip — the fix.
- *
- * Only macro fields present (not undefined) on `row` are scaled/returned, so a lean row shape
- * (e.g. search's 4-macro SELECT) doesn't grow fields it never selected.
- */
-/**
  * Resolves the weight to scale by, and where it came from. The stored `serving_weight_g`
  * column is always trusted first ("column"); only when it's NULL/0 do we fall back to parsing
  * `serving_size` (#5) — a derived weight must never silently look the same as a stated one, so
@@ -97,6 +85,15 @@ function resolveWeight(
   }
   return { weight: null, weight_source: null };
 }
+
+/**
+ * The one shared scaling computation applied at every public read boundary (store.search,
+ * store.lookup, store.lookupByBarcode, store.listCached, and the orchestrator's freshly-fetched
+ * USDA path) so no read path can independently reinvent — or skip — the fix.
+ *
+ * Only macro fields present (not undefined) on `row` are scaled/returned, so a lean row shape
+ * (e.g. search's 4-macro SELECT) doesn't grow fields it never selected.
+ */
 
 function computeBasis(
   row: BasisInput & Partial<Record<MacroField, number | null>>

@@ -1,4 +1,5 @@
 import type { WeightSource } from "./types.js";
+import { roundTo } from "./utils.js";
 
 export interface ParsedServingWeight {
   weight_g: number;
@@ -46,10 +47,6 @@ const CUP_RE = /^(\d+(?:\.\d+)?)\s*cups?$/i;
 const TBSP_RE = /^(\d+(?:\.\d+)?)\s*(?:tbsp|tablespoons?)$/i;
 const TSP_RE = /^(\d+(?:\.\d+)?)\s*(?:tsp|teaspoons?)$/i;
 
-function round2(n: number): number {
-  return Math.round(n * 100) / 100;
-}
-
 /**
  * Derives a serving weight in grams from a free-text `serving_size` string, when the
  * `serving_weight_g` column is NULL. Returns null (never a guess) for anything that isn't
@@ -72,43 +69,43 @@ export function parseServingWeight(
   match = trimmed.match(FLOZ_RE);
   if (match) {
     const n = Number(match[1]);
-    return n > 0 ? { weight_g: round2(n * ML_PER_FLOZ), weight_source: "parsed_volume" } : null;
+    return n > 0 ? { weight_g: roundTo(n * ML_PER_FLOZ, 2), weight_source: "parsed_volume" } : null;
   }
 
   match = trimmed.match(OUNCES_RE);
   if (match) {
     const n = Number(match[1]);
-    return n > 0 ? { weight_g: round2(n * G_PER_OZ), weight_source: "parsed_mass" } : null;
+    return n > 0 ? { weight_g: roundTo(n * G_PER_OZ, 2), weight_source: "parsed_mass" } : null;
   }
 
   match = trimmed.match(ML_RE);
   if (match) {
     const n = Number(match[1]);
-    return n > 0 ? { weight_g: round2(n), weight_source: "parsed_volume" } : null;
+    return n > 0 ? { weight_g: roundTo(n, 2), weight_source: "parsed_volume" } : null;
   }
 
   match = trimmed.match(LITER_RE);
   if (match) {
     const n = Number(match[1]);
-    return n > 0 ? { weight_g: round2(n * 1000), weight_source: "parsed_volume" } : null;
+    return n > 0 ? { weight_g: roundTo(n * 1000, 2), weight_source: "parsed_volume" } : null;
   }
 
   match = trimmed.match(CUP_RE);
   if (match) {
     const n = Number(match[1]);
-    return n > 0 ? { weight_g: round2(n * ML_PER_CUP), weight_source: "parsed_volume" } : null;
+    return n > 0 ? { weight_g: roundTo(n * ML_PER_CUP, 2), weight_source: "parsed_volume" } : null;
   }
 
   match = trimmed.match(TBSP_RE);
   if (match) {
     const n = Number(match[1]);
-    return n > 0 ? { weight_g: round2(n * ML_PER_TBSP), weight_source: "parsed_volume" } : null;
+    return n > 0 ? { weight_g: roundTo(n * ML_PER_TBSP, 2), weight_source: "parsed_volume" } : null;
   }
 
   match = trimmed.match(TSP_RE);
   if (match) {
     const n = Number(match[1]);
-    return n > 0 ? { weight_g: round2(n * ML_PER_TSP), weight_source: "parsed_volume" } : null;
+    return n > 0 ? { weight_g: roundTo(n * ML_PER_TSP, 2), weight_source: "parsed_volume" } : null;
   }
 
   return null;
