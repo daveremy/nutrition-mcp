@@ -12,6 +12,13 @@ export function getDbPath(): string {
   return path.join(getDbDir(), "nutrition.db");
 }
 
+/** Rounds `value` to `decimals` decimal places. Shared by src/scaling.ts (per-field label
+ *  rounding) and src/serving-parse.ts (derived-weight rounding). */
+export function roundTo(value: number, decimals: number): number {
+  const factor = 10 ** decimals;
+  return Math.round(value * factor) / factor;
+}
+
 export function log(msg: string, err?: unknown): void {
   if (err !== undefined) {
     console.error(`[nutrition-mcp] ${msg}`, err);

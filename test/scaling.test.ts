@@ -152,6 +152,196 @@ describe("scaling — the bug this issue fixes", () => {
     });
   });
 
+  describe("derived weight from serving_size when serving_weight_g is NULL (#5)", () => {
+    it("Nature Valley Crunchy PB granola (money fixture): 42GRM parses to weight 42, exact label match", () => {
+      const row = rawRow({
+        id: "on_naturevalley",
+        name: "Nature Valley Crunchy PB granola",
+        calories: 476,
+        protein: 9.5,
+        fat: 19,
+        carbs: 66.7,
+        serving_weight_g: null,
+        serving_size: "42GRM",
+      });
+      const response = toFoodResponse(row);
+      assert.equal(response.basis, "per_serving");
+      assert.equal(response.basis_weight_g, 42);
+      assert.equal(response.weight_source, "parsed_grams");
+      // 476 * 0.42 = 199.92 -> 200, 9.5 * 0.42 = 3.99 -> 4.0, 66.7 * 0.42 = 28.014 -> 28.0,
+      // 19 * 0.42 = 7.98 -> 8.0 — exact match to the physical label (200/4/28/8).
+      assert.equal(response.calories, 200);
+      assert.equal(response.protein, 4);
+      assert.equal(response.carbs, 28);
+      assert.equal(response.fat, 8);
+      // The serving_size string is never rewritten (R7's lesson carries forward to this tier).
+      assert.equal(response.serving_size, "42GRM");
+    });
+
+    it("Pacific organic chicken broth: 235GRM parses to weight 235", () => {
+      const row = rawRow({
+        id: "on_pacificbroth",
+        name: "Pacific Foods Organic Chicken Broth",
+        calories: 4,
+        protein: 0.4,
+        serving_weight_g: null,
+        serving_size: "235GRM",
+      });
+      const response = toFoodResponse(row);
+      assert.equal(response.basis, "per_serving");
+      assert.equal(response.basis_weight_g, 235);
+      assert.equal(response.weight_source, "parsed_grams");
+      // 4 * 2.35 = 9.4 -> rounds to 9 (label is ~10 cal for the 240mL serving size printed on
+      // the carton; this is the deterministic output of parsing the stored "235GRM" string, not
+      // a hand-picked number — close enough to the label to confirm the fix, not a regression
+      // of the 4-cal-per-100g original bug).
+      assert.equal(response.calories, 9);
+    });
+
+    it("Trader Joe's Sea Salt chips (control, existing column weight — must NOT regress)", () => {
+      const row = rawRow({
+        id: "on_tjchips",
+        name: "Trader Joe's Sea Salt Kettle Chips",
+        calories: 535.7,
+        protein: 7.14,
+        serving_weight_g: 28,
+        serving_size: "1 oz (28g)",
+      });
+      const response = toFoodResponse(row);
+      assert.equal(response.basis, "per_serving");
+      assert.equal(response.basis_weight_g, 28);
+      // Existing stored column, not a derived tier.
+      assert.equal(response.weight_source, "column");
+      assert.equal(response.calories, 150);
+      assert.equal(response.protein, 2);
+    });
+
+    it("Tier B — '8 oz' parses as mass (x28.3495)", () => {
+      const row = rawRow({ serving_weight_g: null, serving_size: "8 oz", calories: 50 });
+      const response = toFoodResponse(row);
+      assert.equal(response.weight_source, "parsed_mass");
+      assert.equal(response.basis_weight_g, Math.round(8 * 28.3495 * 100) / 100);
+    });
+
+    it("Tier C — '240 ml' / '1 cup' / '1 tbsp' / '355 ml' parse as volume (density 1.0)", () => {
+      const cases: Array<[string, number]> = [
+        ["240 ml", 240],
+        ["1 cup", 240],
+        ["1 tbsp", 15],
+        ["355 ml", 355],
+      ];
+      for (const [servingSize, expectedWeight] of cases) {
+        const row = rawRow({ serving_weight_g: null, serving_size: servingSize, calories: 50 });
+        const response = toFoodResponse(row);
+        assert.equal(response.weight_source, "parsed_volume", `for "${servingSize}"`);
+        assert.equal(response.basis_weight_g, expectedWeight, `for "${servingSize}"`);
+      }
+    });
+
+    it("'8 fl oz' is parsed_volume, never parsed_mass (the issue's named danger)", () => {
+      const row = rawRow({ serving_weight_g: null, serving_size: "8 fl oz", calories: 50 });
+      const response = toFoodResponse(row);
+      assert.equal(response.weight_source, "parsed_volume");
+      assert.equal(response.basis_weight_g, 240); // 8 * 30 (FDA-label mL/fl-oz), not 8 * 28.3495
+    });
+
+    it("'1 bottle' and '1 can' remain per_100g — never guessed (issue's explicit non-goal)", () => {
+      for (const servingSize of ["1 bottle", "1 can"]) {
+        const row = rawRow({ serving_weight_g: null, serving_size: servingSize, calories: 50 });
+        const response = toFoodResponse(row);
+        assert.equal(response.basis, "per_100g", `for "${servingSize}"`);
+        assert.equal(response.basis_weight_g, null, `for "${servingSize}"`);
+        assert.equal(response.weight_source, null, `for "${servingSize}"`);
+        // The original string must not be rewritten even in the unparseable case.
+        assert.equal(response.serving_size, servingSize);
+      }
+    });
+
+    it("Bertolli Organic Extra Virgin Olive Oil: Tier C is gated, falls back to per_100g honestly (code review round 1, P1)", () => {
+      // Empirically verified: naively applying 1.0 g/mL to this exact row (800 cal/93.3g fat
+      // per 100g, "1 tbsp" = 15 mL, NULL weight) gives 800 * 0.15 = 120 cal — which happens to
+      // match the physical label's 120 cal ONLY because the stored per-100g value (800) is
+      // itself under true olive oil's ~884 cal/100g; against a correctly-stored 884 cal/100g
+      // row, 1.0 g/mL over-reports by ~11% (133 vs label 120). The label's own numbers imply a
+      // density of ~0.90 g/mL (120 cal / 884 true cal-per-100g -> 13.6g per 15mL) — textbook
+      // olive oil is 0.91-0.92, confirming 1.0 is simply wrong for this category. Rather than
+      // encode a food-specific density table, oil (and honey/syrup/butter/etc.) is excluded
+      // from Tier C entirely and left as the honest per_100g fallback — conservative and
+      // explainable beats clever, per the issue's own standing rule.
+      const row = rawRow({
+        id: "on_bertolli_evoo",
+        name: "Organic Extra Virgin Olive Oil by Bertolli",
+        calories: 800,
+        fat: 93.3,
+        serving_weight_g: null,
+        serving_size: "1 tbsp",
+      });
+      const response = toFoodResponse(row);
+      assert.equal(response.basis, "per_100g");
+      assert.equal(response.basis_weight_g, null);
+      assert.equal(response.weight_source, null);
+      // Never over-reports: the headline value is the untouched per-100g number, not a
+      // density-guessed per-serving one.
+      assert.equal(response.calories, 800);
+      assert.equal(response.serving_size, "1 tbsp"); // never rewritten
+    });
+
+    it("Tier A/B (grams/mass) are NOT gated for density-sensitive foods — no assumption involved", () => {
+      // The gate only applies to Tier C (a density assumption). An explicit gram or mass
+      // string for an oil is exact, not a guess, so it must still be derived normally.
+      const gramsRow = rawRow({
+        name: "Extra Virgin Olive Oil",
+        serving_weight_g: null,
+        serving_size: "15GRM",
+        calories: 884,
+      });
+      assert.equal(toFoodResponse(gramsRow).weight_source, "parsed_grams");
+
+      const ozRow = rawRow({
+        name: "Wildflower Honey",
+        serving_weight_g: null,
+        serving_size: "8 oz",
+        calories: 304,
+      });
+      assert.equal(toFoodResponse(ozRow).weight_source, "parsed_mass");
+    });
+
+    it("water-like foods (broth, milk, juice) still get Tier C normally", () => {
+      const row = rawRow({
+        name: "Whole Milk",
+        serving_weight_g: null,
+        serving_size: "1 cup",
+        calories: 61,
+      });
+      const response = toFoodResponse(row);
+      assert.equal(response.basis, "per_serving");
+      assert.equal(response.weight_source, "parsed_volume");
+      assert.equal(response.basis_weight_g, 240);
+    });
+
+    it("also applies to the lean SearchResponse shape (toSearchResponse)", () => {
+      const row: SearchResult = {
+        id: "s2",
+        name: "Broth",
+        brand: null,
+        calories: 4,
+        protein: 0.4,
+        fat: null,
+        carbs: null,
+        serving_size: "235GRM",
+        serving_weight_g: null,
+        source_tier: "local",
+        is_correction: 0,
+        verified_fields: null,
+        superseded_by: null,
+      };
+      const response = toSearchResponse(row);
+      assert.equal(response.basis, "per_serving");
+      assert.equal(response.weight_source, "parsed_grams");
+      assert.equal(response.basis_weight_g, 235);
+    });
+  });
+
   describe("rounding — per-field, not uniform (R9)", () => {
     it("rounds calories and sodium to integers, other macros to 1 decimal", () => {
       const row = rawRow({

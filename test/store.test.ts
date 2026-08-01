@@ -196,6 +196,73 @@ describe("NutritionStore", () => {
     });
   });
 
+  describe("search ranks complete rows above NULL-calorie rows (#6)", () => {
+    it("a row with calories=NULL never outranks a complete row with equivalent text relevance", () => {
+      // Mirrors the real usda_2259794 case: a NULL-calorie row with complete macros, inserted
+      // FIRST so that on a bm25 tie the pre-fix ORDER BY (relevance only, no tiebreak) would
+      // have left it ahead via insertion/rowid order — the exact failure shape the issue
+      // reports ("ranks first for a common query").
+      store.upsert(
+        makeFoodItem({
+          id: "usda_partial_yogurt",
+          name: "Yogurt Greek Plain Whole Milk",
+          source_tier: "usda",
+          source_id: "partial1",
+          calories: null,
+          protein: 8.78,
+          fat: 4.4,
+          carbs: 4.8,
+        })
+      );
+      store.upsert(
+        makeFoodItem({
+          id: "on_complete_yogurt",
+          name: "Yogurt Greek Plain Whole Milk",
+          source_tier: "local",
+          source_id: "complete1",
+          calories: 94,
+          protein: 8.78,
+          fat: 4.4,
+          carbs: 4.8,
+        })
+      );
+
+      const results = store.search("Yogurt Greek Plain Whole Milk");
+      const ids = results.map((r) => r.id);
+      assert.ok(ids.includes("on_complete_yogurt"));
+      assert.ok(ids.includes("usda_partial_yogurt"));
+      assert.ok(
+        ids.indexOf("on_complete_yogurt") < ids.indexOf("usda_partial_yogurt"),
+        `expected complete row before partial row, got order: ${ids.join(", ")}`
+      );
+    });
+
+    it("bm25 relevance still governs ordering within each completeness bucket", () => {
+      // Two complete rows, one a much better text match — completeness ranking must not
+      // scramble relevance ordering among rows that are equally complete.
+      store.upsert(
+        makeFoodItem({
+          id: "complete_exact",
+          name: "Salmon Fillet",
+          source_id: "exact1",
+          calories: 200,
+        })
+      );
+      store.upsert(
+        makeFoodItem({
+          id: "complete_partial_match",
+          name: "Grilled Salmon Fillet With Herbs And Lemon Butter Sauce",
+          source_id: "partialmatch1",
+          calories: 250,
+        })
+      );
+
+      const results = store.search("Salmon Fillet");
+      const ids = results.map((r) => r.id);
+      assert.ok(ids.indexOf("complete_exact") < ids.indexOf("complete_partial_match"));
+    });
+  });
+
   describe("FTS edge cases", () => {
     it("returns empty array for empty query", () => {
       store.upsert(makeFoodItem({ id: "fts_edge_1", name: "Some Food" }));

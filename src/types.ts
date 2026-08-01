@@ -10,6 +10,14 @@ export const MACRO_FIELDS = [
 ] as const;
 export type MacroField = (typeof MACRO_FIELDS)[number];
 
+/**
+ * Where a result's serving weight came from. "column" = the stored `serving_weight_g` value
+ * (the trusted case). The other three are derived at read time by parsing `serving_size` when
+ * the column is NULL — see `src/serving-parse.ts`. A derived weight must never be silently
+ * indistinguishable from a stated one, so this is emitted on every response that has a weight.
+ */
+export type WeightSource = "column" | "parsed_grams" | "parsed_mass" | "parsed_volume";
+
 export interface FoodItem {
   id: string;
   name: string;
@@ -72,6 +80,7 @@ export interface FoodResponse extends Partial<Record<MacroField, number | null>>
   serving_size: string | null;
   basis: "per_serving" | "per_100g";
   basis_weight_g: number | null;
+  weight_source: WeightSource | null;
   per_100g: Partial<Record<MacroField, number | null>>;
   atwater_delta_pct: number | null;
   is_correction: boolean;
@@ -94,6 +103,7 @@ export interface SearchResponse extends Partial<Record<MacroField, number | null
   serving_size: string | null;
   basis: "per_serving" | "per_100g";
   basis_weight_g: number | null;
+  weight_source: WeightSource | null;
   per_100g: Partial<Record<MacroField, number | null>>;
   atwater_delta_pct: number | null;
   is_correction: boolean;

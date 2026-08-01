@@ -4,13 +4,11 @@ import type {
   RawFoodRow,
   SearchResponse,
   SearchResult,
+  WeightSource,
 } from "./types.js";
 import { MACRO_FIELDS } from "./types.js";
-
-function roundTo(value: number, decimals: number): number {
-  const factor = 10 ** decimals;
-  return Math.round(value * factor) / factor;
-}
+import { parseServingWeight, isDensitySensitiveFood } from "./serving-parse.js";
+import { roundTo } from "./utils.js";
 
 // Fields that are integer-ish in real-world label precision — 1 decimal place implies false
 // precision (sodium in mg, calories in kcal are never reported fractionally on a label).
@@ -55,16 +53,49 @@ interface BasisInput {
   is_correction?: number;
   verified_fields?: string | null;
   superseded_by?: string | null;
+  name?: string;
 }
 
 interface BasisFields {
   basis: "per_serving" | "per_100g";
   basis_weight_g: number | null;
+  weight_source: WeightSource | null;
   per_100g: Partial<Record<MacroField, number | null>>;
   atwater_delta_pct: number | null;
   is_correction: boolean;
   verified_fields: string[] | null;
   superseded_by: string | null;
+}
+
+/**
+ * Resolves the weight to scale by, and where it came from. The stored `serving_weight_g`
+ * column is always trusted first ("column"); only when it's NULL/0 do we fall back to parsing
+ * `serving_size` (#5) — a derived weight must never silently look the same as a stated one, so
+ * every non-null result reports which tier produced it.
+ *
+ * Tier C (volumetric) parses are suppressed for foods whose name matches a known
+ * density-sensitive category (oil, honey, syrup, etc.) — see `isDensitySensitiveFood` in
+ * serving-parse.ts. A 1.0 g/mL guess is wrong enough on those foods (an oil at 0.92 g/mL, honey
+ * at 1.4 g/mL) that the honest `per_100g` fallback is the safer default; unlike Tier A/B, Tier C
+ * involves an assumption, not a fact, so it's the only tier that gets gated (code review round
+ * 1, P1 — see /tmp/review-5/REVIEW.md).
+ */
+function resolveWeight(
+  servingWeightG: number | null | undefined,
+  servingSize: string | null | undefined,
+  name: string | null | undefined
+): { weight: number | null; weight_source: WeightSource | null } {
+  if (servingWeightG != null && servingWeightG > 0) {
+    return { weight: servingWeightG, weight_source: "column" };
+  }
+  const parsed = parseServingWeight(servingSize);
+  if (parsed) {
+    if (parsed.weight_source === "parsed_volume" && isDensitySensitiveFood(name)) {
+      return { weight: null, weight_source: null };
+    }
+    return { weight: parsed.weight_g, weight_source: parsed.weight_source };
+  }
+  return { weight: null, weight_source: null };
 }
 
 /**
@@ -75,11 +106,12 @@ interface BasisFields {
  * Only macro fields present (not undefined) on `row` are scaled/returned, so a lean row shape
  * (e.g. search's 4-macro SELECT) doesn't grow fields it never selected.
  */
+
 function computeBasis(
   row: BasisInput & Partial<Record<MacroField, number | null>>
 ): { fields: BasisFields; scaled: Partial<Record<MacroField, number | null>> } {
-  const weight = row.serving_weight_g;
-  const hasWeight = weight != null && weight > 0;
+  const { weight, weight_source } = resolveWeight(row.serving_weight_g, row.serving_size, row.name);
+  const hasWeight = weight != null;
 
   const per100g: Partial<Record<MacroField, number | null>> = {};
   const scaled: Partial<Record<MacroField, number | null>> = {};
@@ -100,6 +132,7 @@ function computeBasis(
     fields: {
       basis: hasWeight ? "per_serving" : "per_100g",
       basis_weight_g: hasWeight ? (weight as number) : null,
+      weight_source,
       per_100g: per100g,
       atwater_delta_pct: computeAtwaterDeltaPct(
         row.calories ?? null,

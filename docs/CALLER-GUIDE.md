@@ -39,6 +39,44 @@ on which:
 `per_100g` is included on **every** result regardless of `basis`, so you always have the canonical
 values available for your own reasoning even when `basis` is `"per_serving"`.
 
+## `weight_source` — a stated weight and a guessed weight are not the same thing
+
+Whenever `basis` is `"per_serving"`, `weight_source` tells you where `basis_weight_g` came
+from:
+
+- `"column"` — the food's database record states its serving weight directly. Trust this like
+  any other stated value.
+- `"parsed_grams"` — the serving weight wasn't stored directly, but `serving_size` was an
+  unambiguous gram string (e.g. `"42GRM"`, `"70 g"`) and we read the number straight off it.
+  Zero ambiguity — treat the same as `"column"`.
+- `"parsed_mass"` — derived from a mass unit (currently ounces, e.g. `"8 oz"`) via a fixed
+  conversion factor. Deterministic, no assumption involved — treat the same as `"column"`.
+- `"parsed_volume"` — derived from a volume unit (`ml`, `l`, `cup`, `tbsp`, `tsp`, `fl oz`) by
+  **assuming the food has water-like density (1.0 g/mL)**. This is a real assumption, not a
+  fact, and it's only applied when it's likely to be close — see the gate below. Even then,
+  treat `weight_source: "parsed_volume"` the same way you'd treat a large `atwater_delta_pct`:
+  a hint worth a second look for anything you suspect isn't quite water-like, not a number to
+  log blind.
+
+**The oil/honey gate.** Foods whose name matches a known density-sensitive category (oil,
+honey, syrup, molasses, butter, margarine, shortening, lard, ghee) never get a `parsed_volume`
+weight at all — a 1.0 g/mL guess is wrong enough for these (oil ~0.92 g/mL, honey ~1.4 g/mL)
+that the server won't guess. Verified against a real product: Bertolli Extra Virgin Olive Oil,
+stored 800 cal/100g, `serving_size: "1 tbsp"`, no stored weight — naive 1.0 g/mL math gives 120
+cal here (which happens to match the label only because the stored per-100g value is itself
+under true olive oil's ~884 cal/100g; against a correctly-stored value the same math
+over-reports by ~11%). Rather than encode a per-food density table, these rows fall back to
+`basis: "per_100g"` — you'll need to ask the user for the serving weight or web-search for it,
+same as any other unresolvable-weight food. Tier A (`parsed_grams`) and Tier B
+(`parsed_mass`) are unaffected by this gate — an explicit gram or ounce string is a fact, not a
+density assumption, so it applies even to oils and honey.
+
+When `basis` is `"per_100g"` (no weight could be resolved at all — including from
+`serving_size`, e.g. `"1 bottle"`/`"1 can"` don't carry a parseable weight, and oil/honey-class
+foods are deliberately excluded from the volumetric tier above), `weight_source` is `null`.
+That's still the honest per-100g fallback described above, not a fifth `weight_source` value —
+there's simply no weight to attribute.
+
 ## `atwater_delta_pct` — a number, not a flag, and it doesn't catch what you think
 
 `atwater_delta_pct` measures how far stated calories diverge from what protein/fat/carbs imply
@@ -89,9 +127,11 @@ Rough decision order, cheapest-to-most-effort:
 3. **`basis: "per_100g"` (unknown serving weight)** → you cannot get a per-serving number from
    this alone. Ask the user for the serving weight (often on the package next to "Nutrition
    Facts"), or web-search for the specific product's serving size, then proceed.
-4. **Large `|atwater_delta_pct|` on a food that isn't fiber/sugar-alcohol-heavy, or `source_tier:
-   "web"` with no `verified_fields`** → treat as a hint, not a source. Web-search to corroborate
-   before logging something a user will rely on, especially for a new/unfamiliar food.
+4. **Large `|atwater_delta_pct|` on a food that isn't fiber/sugar-alcohol-heavy, or
+   `source_tier: "web"` with no `verified_fields`** → treat as a hint, not a source.
+   Web-search to corroborate before logging something a user will rely on, especially for a
+   new/unfamiliar food. (Note: oil/honey-class foods never get a `parsed_volume` weight in the
+   first place — they fall back to case 3 above instead of producing a wrong number.)
 5. **The user has the physical package in hand** → this is strictly better evidence than any
    database lookup. Prefer asking them to read the label over trusting a plausible-looking number,
    *especially* for branded packaged foods (bars, yogurt cups, drinks) — these are exactly the

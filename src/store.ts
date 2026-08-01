@@ -132,6 +132,10 @@ export class NutritionStore {
     const terms = sanitized.split(/\s+/).filter(Boolean);
     const ftsQuery = terms.map((t) => `"${t}"*`).join(" ");
 
+    // #6: a row with NULL calories ranks below a complete row at the same relevance rather
+    // than possibly outranking it — a caller reading `calories` from the top result gets a
+    // silent null instead of a real number for a food that's just as findable via a complete
+    // row. bm25 relevance remains the tiebreak within each completeness bucket.
     const stmt = this.db.prepare(`
       SELECT f.id, f.name, f.brand, f.calories, f.protein, f.fat, f.carbs,
              f.serving_size, f.serving_weight_g, f.source_tier, f.is_correction,
@@ -139,7 +143,7 @@ export class NutritionStore {
       FROM foods_fts fts
       JOIN foods f ON f.rowid = fts.rowid
       WHERE foods_fts MATCH ?
-      ORDER BY bm25(foods_fts) ASC
+      ORDER BY (CASE WHEN f.calories IS NULL THEN 1 ELSE 0 END) ASC, bm25(foods_fts) ASC
       LIMIT ?
     `);
 
