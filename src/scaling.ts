@@ -7,12 +7,17 @@ import type {
 } from "./types.js";
 import { MACRO_FIELDS } from "./types.js";
 
+function roundTo(value: number, decimals: number): number {
+  const factor = 10 ** decimals;
+  return Math.round(value * factor) / factor;
+}
+
 // Fields that are integer-ish in real-world label precision — 1 decimal place implies false
 // precision (sodium in mg, calories in kcal are never reported fractionally on a label).
 const ROUND_INT_FIELDS: ReadonlySet<MacroField> = new Set(["calories", "sodium"]);
 
 function roundField(field: MacroField, value: number): number {
-  return ROUND_INT_FIELDS.has(field) ? Math.round(value) : Math.round(value * 10) / 10;
+  return roundTo(value, ROUND_INT_FIELDS.has(field) ? 0 : 1);
 }
 
 function parseVerifiedFields(raw: string | null | undefined): string[] | null {
@@ -41,7 +46,7 @@ function computeAtwaterDeltaPct(
   if (calories == null || protein == null || fat == null || carbs == null) return null;
   const atwaterKcal = 4 * protein + 4 * carbs + 9 * fat;
   if (atwaterKcal === 0) return null;
-  return Math.round(((calories - atwaterKcal) / atwaterKcal) * 1000) / 10;
+  return roundTo(((calories - atwaterKcal) / atwaterKcal) * 100, 1);
 }
 
 interface BasisInput {
@@ -60,7 +65,6 @@ interface BasisFields {
   is_correction: boolean;
   verified_fields: string[] | null;
   superseded_by: string | null;
-  scaled: Partial<Record<MacroField, number | null>>;
 }
 
 /**
@@ -71,7 +75,9 @@ interface BasisFields {
  * Only macro fields present (not undefined) on `row` are scaled/returned, so a lean row shape
  * (e.g. search's 4-macro SELECT) doesn't grow fields it never selected.
  */
-function computeBasis(row: BasisInput & Partial<Record<MacroField, number | null>>): BasisFields {
+function computeBasis(
+  row: BasisInput & Partial<Record<MacroField, number | null>>
+): { fields: BasisFields; scaled: Partial<Record<MacroField, number | null>> } {
   const weight = row.serving_weight_g;
   const hasWeight = weight != null && weight > 0;
 
@@ -91,29 +97,31 @@ function computeBasis(row: BasisInput & Partial<Record<MacroField, number | null
   }
 
   return {
-    basis: hasWeight ? "per_serving" : "per_100g",
-    basis_weight_g: hasWeight ? (weight as number) : null,
-    per_100g: per100g,
-    atwater_delta_pct: computeAtwaterDeltaPct(
-      row.calories ?? null,
-      row.protein ?? null,
-      row.fat ?? null,
-      row.carbs ?? null
-    ),
-    is_correction: row.is_correction === 1,
-    verified_fields: parseVerifiedFields(row.verified_fields),
-    superseded_by: row.superseded_by ?? null,
+    fields: {
+      basis: hasWeight ? "per_serving" : "per_100g",
+      basis_weight_g: hasWeight ? (weight as number) : null,
+      per_100g: per100g,
+      atwater_delta_pct: computeAtwaterDeltaPct(
+        row.calories ?? null,
+        row.protein ?? null,
+        row.fat ?? null,
+        row.carbs ?? null
+      ),
+      is_correction: row.is_correction === 1,
+      verified_fields: parseVerifiedFields(row.verified_fields),
+      superseded_by: row.superseded_by ?? null,
+    },
     scaled,
   };
 }
 
 /** Build the full-detail public response for nutrition_lookup / nutrition_barcode. */
 export function toFoodResponse(row: RawFoodRow): FoodResponse {
-  const basis = computeBasis(row);
-  // Destructure off the raw macro/internal columns — they're replaced by basis.scaled /
-  // basis.per_100g / the derived basis fields below. Everything else in `rest` (id, name, brand,
-  // type, ean_13, source_tier, source_id, source_query, serving_size, alternate_names_text,
-  // labels, ingredients, data_source, cached_at, updated_at) passes through unchanged.
+  const { fields, scaled } = computeBasis(row);
+  // Destructure off the raw macro/internal columns — they're replaced by `fields`/`scaled` below.
+  // Everything else in `rest` (id, name, brand, type, ean_13, source_tier, source_id,
+  // source_query, serving_size, alternate_names_text, labels, ingredients, data_source,
+  // cached_at, updated_at) passes through unchanged.
   const {
     calories: _calories,
     protein: _protein,
@@ -129,36 +137,20 @@ export function toFoodResponse(row: RawFoodRow): FoodResponse {
     ...rest
   } = row;
 
-  return {
-    ...rest,
-    basis: basis.basis,
-    basis_weight_g: basis.basis_weight_g,
-    per_100g: basis.per_100g,
-    atwater_delta_pct: basis.atwater_delta_pct,
-    is_correction: basis.is_correction,
-    verified_fields: basis.verified_fields,
-    superseded_by: basis.superseded_by,
-    ...basis.scaled,
-  };
+  return { ...rest, ...fields, ...scaled };
 }
 
 /** Build the lean list-item public response for nutrition_search / nutrition_cache_list. */
 export function toSearchResponse(row: SearchResult): SearchResponse {
-  const basis = computeBasis(row);
+  const { fields, scaled } = computeBasis(row);
   return {
     id: row.id,
     name: row.name,
     brand: row.brand,
     source_tier: row.source_tier,
     serving_size: row.serving_size,
-    basis: basis.basis,
-    basis_weight_g: basis.basis_weight_g,
-    per_100g: basis.per_100g,
-    atwater_delta_pct: basis.atwater_delta_pct,
-    is_correction: basis.is_correction,
-    verified_fields: basis.verified_fields,
-    superseded_by: basis.superseded_by,
-    ...basis.scaled,
+    ...fields,
+    ...scaled,
   };
 }
 
@@ -211,5 +203,3 @@ export function resolveOverrideInput(
 
   return { ok: true, converted, suppliedMacros };
 }
-
-export { MACRO_FIELDS };

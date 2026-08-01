@@ -343,11 +343,9 @@ export class NutritionStore {
     const priorOverride = this.getRawRowBySourceId("web", overrideSourceId);
     const overrideId = priorOverride?.id ?? NutritionStore.generateId("web");
 
-    const suppliedMacroFields = MACRO_FIELDS.filter(
-      (field) => fields[field] !== undefined
-    ) as string[];
+    const suppliedMacroFields = MACRO_FIELDS.filter((field) => fields[field] !== undefined);
     const priorVerified: string[] = priorOverride?.verified_fields
-      ? (JSON.parse(priorOverride.verified_fields) as string[])
+      ? JSON.parse(priorOverride.verified_fields)
       : [];
     const mergedVerified = Array.from(new Set([...priorVerified, ...suppliedMacroFields]));
 
