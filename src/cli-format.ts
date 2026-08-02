@@ -1,3 +1,4 @@
+import { IMPOSSIBLE_MACROS } from "./types.js";
 import type { SearchResponse } from "./types.js";
 
 // Side-effect-free by design (plan review round 1, codex): cli.ts ends with an unconditional
@@ -8,7 +9,7 @@ const NAME_WIDTH = 40;
 // Visible regardless of which basis group a row lands in — put the signal where a careless
 // read can't drop it (the name column is always read first), matching the header-carries-the-
 // unit philosophy the rest of this fix uses (#9).
-const CORRUPT_MARKER = "⚠ "; // "⚠ "
+const CORRUPT_MARKER = "⚠ ";
 
 function fmt(n: number | null | undefined): string {
   return n != null ? n.toFixed(1) : "-";
@@ -56,7 +57,7 @@ function renderGroup(results: SearchResponse[], basis: "per_serving" | "per_100g
     const baseName = r.brand ? `${r.name} (${r.brand})` : r.name;
     // Corrupt rows (#10's mass-conservation guard) must stay visibly marked no matter which
     // basis group they land in — a caller must not be able to miss it by skimming numbers.
-    const displayName = r.data_quality === "impossible_macros" ? `${CORRUPT_MARKER}${baseName}` : baseName;
+    const displayName = r.data_quality === IMPOSSIBLE_MACROS ? `${CORRUPT_MARKER}${baseName}` : baseName;
     const name = displayName.slice(0, NAME_WIDTH - 1);
     lines.push(
       name.padEnd(NAME_WIDTH) +

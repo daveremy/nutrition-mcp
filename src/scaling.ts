@@ -1,4 +1,5 @@
 import type {
+  DataQuality,
   FoodResponse,
   MacroField,
   RawFoodRow,
@@ -6,7 +7,7 @@ import type {
   SearchResult,
   WeightSource,
 } from "./types.js";
-import { MACRO_FIELDS } from "./types.js";
+import { IMPOSSIBLE_MACROS, MACRO_FIELDS } from "./types.js";
 import { parseServingWeight, isDensitySensitiveFood } from "./serving-parse.js";
 import { roundTo } from "./utils.js";
 
@@ -44,14 +45,21 @@ export function computeMacroMassSum(
   return (protein ?? 0) + (carbs ?? 0) + (fat ?? 0);
 }
 
+// Single source of truth for the ">100" comparison (refine pass, code reuse/quality review):
+// both the public hasImpossibleMacros() and computeBasis() below — which also needs the raw
+// sum for macro_mass_g, not just the boolean — go through this rather than each re-writing
+// the threshold check.
+function exceedsMassLimit(sum: number | null): boolean {
+  return sum != null && sum > MASS_CONSERVATION_LIMIT_G;
+}
+
 /** True when a row's stored per-100g macros are physically impossible (see above). */
 export function hasImpossibleMacros(
   protein: number | null | undefined,
   carbs: number | null | undefined,
   fat: number | null | undefined
 ): boolean {
-  const sum = computeMacroMassSum(protein, carbs, fat);
-  return sum != null && sum > MASS_CONSERVATION_LIMIT_G;
+  return exceedsMassLimit(computeMacroMassSum(protein, carbs, fat));
 }
 
 function parseVerifiedFields(raw: string | null | undefined): string[] | null {
@@ -101,7 +109,7 @@ interface BasisFields {
   is_correction: boolean;
   verified_fields: string[] | null;
   superseded_by: string | null;
-  data_quality: "impossible_macros" | null;
+  data_quality: DataQuality;
   macro_mass_g: number | null;
 }
 
@@ -159,7 +167,7 @@ function computeBasis(
   const { weight, weight_source } = resolveWeight(row.serving_weight_g, row.serving_size, row.name);
 
   const macroMassSum = computeMacroMassSum(row.protein ?? null, row.carbs ?? null, row.fat ?? null);
-  const impossibleMacros = macroMassSum != null && macroMassSum > MASS_CONSERVATION_LIMIT_G;
+  const impossibleMacros = exceedsMassLimit(macroMassSum);
 
   // Corrupt rows never scale, no matter what weight would otherwise have resolved — and never
   // claim a weight_source, since we are declining to use the resolved weight, not asserting
@@ -188,7 +196,7 @@ function computeBasis(
       basis_weight_g: hasWeight ? (weight as number) : null,
       weight_source: effectiveWeightSource,
       per_100g: per100g,
-      data_quality: impossibleMacros ? "impossible_macros" : null,
+      data_quality: impossibleMacros ? IMPOSSIBLE_MACROS : null,
       // Unrounded deliberately: rounding could print e.g. 100.0 for a rejected 100.04 sum,
       // contradicting the strict >100 boundary to callers. Diagnostic field, not a display
       // macro — precision over prettiness.

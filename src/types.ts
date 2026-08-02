@@ -1,3 +1,9 @@
+// Mass-conservation guard (#10): the one canonical value for "this row's macros are
+// physically impossible," reused across BasisFields/FoodResponse/SearchResponse/cli-format.ts
+// so nothing compares against a re-typed string literal (refine pass, code quality review).
+export const IMPOSSIBLE_MACROS = "impossible_macros" as const;
+export type DataQuality = typeof IMPOSSIBLE_MACROS | null;
+
 /** Nutrient fields stored per-100g in the DB. Shared by FoodItem and SearchResult. */
 export const MACRO_FIELDS = [
   "calories",
@@ -86,8 +92,8 @@ export interface FoodResponse extends Partial<Record<MacroField, number | null>>
   is_correction: boolean;
   verified_fields: string[] | null;
   superseded_by: string | null;
-  /** "impossible_macros" when protein+carbs+fat > 100g per 100g of food — see #10. */
-  data_quality: "impossible_macros" | null;
+  /** IMPOSSIBLE_MACROS when protein+carbs+fat > 100g per 100g of food — see #10. */
+  data_quality: DataQuality;
   /** Unrounded protein+carbs+fat sum per 100g, populated only when data_quality is set. */
   macro_mass_g: number | null;
   alternate_names_text: string | null;
@@ -113,8 +119,8 @@ export interface SearchResponse extends Partial<Record<MacroField, number | null
   is_correction: boolean;
   verified_fields: string[] | null;
   superseded_by: string | null;
-  /** "impossible_macros" when protein+carbs+fat > 100g per 100g of food — see #10. */
-  data_quality: "impossible_macros" | null;
+  /** IMPOSSIBLE_MACROS when protein+carbs+fat > 100g per 100g of food — see #10. */
+  data_quality: DataQuality;
   /** Unrounded protein+carbs+fat sum per 100g, populated only when data_quality is set. */
   macro_mass_g: number | null;
 }
