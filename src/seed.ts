@@ -8,6 +8,7 @@ import Database from "better-sqlite3";
 
 import { setSeedPhase, setSeedInserted } from "./seed-state.js";
 import { getDbDir, getDbPath, log, normalizeBarcode } from "./utils.js";
+import { hasImpossibleMacros } from "./scaling.js";
 
 const DATASET_URL =
   "https://github.com/daveremy/nutrition-mcp/releases/download/dataset-v2025.1/opennutrition-dataset-2025.1.zip";
@@ -80,7 +81,7 @@ function safeJsonParse(val: string | undefined): any {
   try { return JSON.parse(val); } catch { return null; }
 }
 
-function mapTsvRow(row: TsvRow) {
+export function mapTsvRow(row: TsvRow) {
   const name = row["name"]?.trim();
   if (!name) return null;
 
@@ -91,6 +92,15 @@ function mapTsvRow(row: TsvRow) {
 
   // Parse nutrition_100g JSON
   const nutrition = safeJsonParse(row["nutrition_100g"]);
+
+  // Mass-conservation guard (#10): don't seed a physically impossible row into a freshly-built
+  // DB at all — the read-path guard in computeBasis still protects any pre-existing DB that
+  // hasn't been rebuilt yet, but a fresh build shouldn't reintroduce the 3,218 local rows this
+  // check identifies. Same shared primitive the read path and USDA cache-write use, so there's
+  // one definition of "corrupt," not three that could drift.
+  if (hasImpossibleMacros(nutrition?.protein ?? null, nutrition?.carbohydrates ?? null, nutrition?.total_fat ?? null)) {
+    return null;
+  }
 
   // Parse alternate_names JSON array to space-separated text
   const altNamesArr = safeJsonParse(row["alternate_names"]);

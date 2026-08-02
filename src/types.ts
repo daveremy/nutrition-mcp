@@ -86,6 +86,10 @@ export interface FoodResponse extends Partial<Record<MacroField, number | null>>
   is_correction: boolean;
   verified_fields: string[] | null;
   superseded_by: string | null;
+  /** "impossible_macros" when protein+carbs+fat > 100g per 100g of food — see #10. */
+  data_quality: "impossible_macros" | null;
+  /** Unrounded protein+carbs+fat sum per 100g, populated only when data_quality is set. */
+  macro_mass_g: number | null;
   alternate_names_text: string | null;
   labels: string | null;
   ingredients: string | null;
@@ -109,6 +113,10 @@ export interface SearchResponse extends Partial<Record<MacroField, number | null
   is_correction: boolean;
   verified_fields: string[] | null;
   superseded_by: string | null;
+  /** "impossible_macros" when protein+carbs+fat > 100g per 100g of food — see #10. */
+  data_quality: "impossible_macros" | null;
+  /** Unrounded protein+carbs+fat sum per 100g, populated only when data_quality is set. */
+  macro_mass_g: number | null;
 }
 
 export interface CacheStats {

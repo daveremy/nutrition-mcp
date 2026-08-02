@@ -92,6 +92,30 @@ several percent off naive Atwater math. Use it as one more input, not a pass/fai
 `|atwater_delta_pct|` (rule of thumb: past ±15%) on a food that isn't fiber/sugar-alcohol-heavy is
 worth a second look; a small one on a protein bar is unremarkable.
 
+## `data_quality` / `macro_mass_g` — physically impossible rows
+
+Every result is checked for mass conservation: `protein + carbs + fat` cannot physically exceed
+100g inside 100g of food — the parts cannot outweigh the whole. This needs no domain knowledge
+(unlike a calorie ceiling, which would need to know whether e.g. 900 cal/100g is plausible — chia
+oil legitimately reads 992) and has no false positives: it's arithmetic, not nutrition.
+
+If `data_quality` is `"impossible_macros"`, the row's stored data is corrupt — **do not log any
+of its values.** `macro_mass_g` carries the impossible sum so you (or the user) can see exactly
+how far off it is. This is the one case stronger than `atwater_delta_pct`: Atwater only catches a
+row that's internally inconsistent with itself, and a row can pass Atwater cleanly while still
+being physically impossible (a corrupt row can be self-consistently wrong). Treat
+`impossible_macros` as a hard stop, not a hint — web-search the product or ask the user for the
+real numbers, the same as you would for an unresolvable serving weight.
+
+A flagged row is never scaled to a per-serving number, even if a serving weight is otherwise
+resolvable — `basis` is forced to `"per_100g"` and `weight_source` to `null` on any row this check
+flags, specifically so a corrupt per-100g value can never be amplified into a much larger, more
+confident-looking per-serving one (this was the exact failure mode of the P0 this check exists to
+catch: a corrupt row that would have "self-policed" at its original per-100g value became 43x more
+absurd, and confidently labeled `per_serving`, once scaling was introduced). The row itself is
+still returned — never silently dropped — so you have the option to web-search or ask rather than
+silently falling back to a worse, unflagged match.
+
 ## `source_tier`, `is_correction`, `verified_fields` — how much to trust this row
 
 - `source_tier`: `"local"` (OpenNutrition dataset), `"usda"` (USDA FoodData Central), or `"web"`
@@ -121,6 +145,9 @@ most current one.
 
 Rough decision order, cheapest-to-most-effort:
 
+0. **`data_quality: "impossible_macros"`** → hard stop, regardless of anything else on the row
+   (including `is_correction` or `verified_fields` — this check runs on every row, corrected or
+   not). Never log these values. Web-search the product or ask the user.
 1. **`is_correction: true` or a verified field for the value you need** → trust it.
 2. **`basis: "per_serving"`, no correction, plausible `atwater_delta_pct`, source is `local` or
    `usda`** → trust it, this is the common case and it's fine.

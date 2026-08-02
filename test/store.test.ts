@@ -621,6 +621,81 @@ describe("NutritionStore", () => {
     });
   });
 
+  describe("mass-conservation guard (#10) fires on every read path — the 'fixed one, missed another' shape", () => {
+    function seedCorruptRow(id: string): void {
+      // Mirrors the real usda_1838212 row that caused the P0: sum = 950g per 100g of food.
+      store.upsert(
+        makeFoodItem({
+          id,
+          name: "Corrupt Boost-shaped Row",
+          source_tier: "usda",
+          source_id: id,
+          calories: 4380,
+          protein: 250,
+          carbs: 562,
+          fat: 138,
+          serving_weight_g: null,
+          serving_size: "11 fl oz",
+        })
+      );
+    }
+
+    it("lookup flags the row and never scales it", () => {
+      seedCorruptRow("usda_corrupt_lookup");
+      const result = store.lookup("usda_corrupt_lookup");
+      assert.ok(result);
+      assert.equal(result.data_quality, "impossible_macros");
+      assert.equal(result.basis, "per_100g");
+      assert.equal(result.calories, 4380);
+    });
+
+    it("lookupByBarcode flags the row", () => {
+      store.upsert(
+        makeFoodItem({
+          id: "usda_corrupt_bc",
+          source_tier: "usda",
+          source_id: "corrupt_bc",
+          ean_13: "9999999999999",
+          calories: 4380,
+          protein: 250,
+          carbs: 562,
+          fat: 138,
+          serving_weight_g: null,
+        })
+      );
+      const result = store.lookupByBarcode("9999999999999");
+      assert.ok(result);
+      assert.equal(result.data_quality, "impossible_macros");
+    });
+
+    it("search flags the row — not just lookup/lookupByBarcode", () => {
+      seedCorruptRow("usda_corrupt_search");
+      const results = store.search("Corrupt Boost-shaped Row");
+      const found = results.find((r) => r.id === "usda_corrupt_search");
+      assert.ok(found);
+      assert.equal(found.data_quality, "impossible_macros");
+      assert.equal(found.basis, "per_100g");
+    });
+
+    it("listCached flags the row — the exact surface #10 calls out as easy to miss", () => {
+      seedCorruptRow("usda_corrupt_listcached");
+      const results = store.listCached("usda", 50, 0);
+      const found = results.find((r) => r.id === "usda_corrupt_listcached");
+      assert.ok(found);
+      assert.equal(found.data_quality, "impossible_macros");
+    });
+
+    it("a non-corrupt row alongside a corrupt one is unaffected (no false positives)", () => {
+      seedCorruptRow("usda_corrupt_mixed");
+      store.upsert(makeFoodItem({ id: "usda_clean_mixed", source_tier: "usda", name: "Clean Row", calories: 200, protein: 10, carbs: 20, fat: 5 }));
+      const results = store.listCached("usda", 50, 0);
+      const corrupt = results.find((r) => r.id === "usda_corrupt_mixed");
+      const clean = results.find((r) => r.id === "usda_clean_mixed");
+      assert.equal(corrupt?.data_quality, "impossible_macros");
+      assert.equal(clean?.data_quality, null);
+    });
+  });
+
   describe("schema migration is idempotent and safe on a pre-existing DB", () => {
     it("running migrateSchema twice does not error or lose data", () => {
       store.upsert(makeFoodItem({ id: "migrate_1", name: "Migration Food" }));

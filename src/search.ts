@@ -1,7 +1,7 @@
-import type { FoodResponse, SearchResponse } from "./types.js";
+import type { FoodResponse, RawFoodRow, SearchResponse } from "./types.js";
 import { NutritionStore } from "./store.js";
 import { searchUsda, lookupBarcodeUsda } from "./client.js";
-import { toSearchResponse } from "./scaling.js";
+import { toFoodResponse, toSearchResponse, hasImpossibleMacros } from "./scaling.js";
 import { normalizeBarcode } from "./utils.js";
 
 export class SearchOrchestrator {
@@ -39,8 +39,15 @@ export class SearchOrchestrator {
       // Skip if already in local results by ID (previously cached)
       if (localIds.has(food.id)) continue;
 
-      // Cache non-duplicate USDA results for future searches
-      this.store.upsert(food);
+      // Mass-conservation guard (#10): never let a physically impossible USDA row enter the
+      // cache — the read-path guard in computeBasis would still catch it on every future read,
+      // but not writing it at all keeps the cache itself clean and matches the issue's explicit
+      // "stop it entering" requirement for the cache-write boundary. The response below is still
+      // built and returned (flagged), never silently dropped.
+      if (!hasImpossibleMacros(food.protein, food.carbs, food.fat)) {
+        // Cache non-duplicate USDA results for future searches
+        this.store.upsert(food);
+      }
 
       // Run the freshly-fetched item through the same shared scaling helper every other read
       // path uses, rather than hand-picking raw (unscaled) fields — otherwise the *first* time a
@@ -83,6 +90,22 @@ export class SearchOrchestrator {
     // Tier 2: USDA lookup
     const usdaFood = await lookupBarcodeUsda(barcode);
     if (usdaFood) {
+      // Mass-conservation guard (#10): don't cache a physically impossible USDA row — same
+      // rationale as the search path above. Since it's never written, `store.lookup()` can't
+      // read it back; build the flagged response directly from the in-memory USDA object
+      // instead, synthesizing the fields `toFoodResponse` needs beyond `FoodItem` the same way
+      // they'd look once actually stored (plan review round 1, codex).
+      if (hasImpossibleMacros(usdaFood.protein, usdaFood.carbs, usdaFood.fat)) {
+        const now = new Date().toISOString();
+        const raw: RawFoodRow = {
+          ...usdaFood,
+          cached_at: now,
+          updated_at: now,
+          superseded_by: this.store.findSupersededBy(usdaFood.id),
+        };
+        return toFoodResponse(raw);
+      }
+
       this.store.upsert(usdaFood);
       return this.store.lookup(usdaFood.id);
     }

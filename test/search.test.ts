@@ -1,10 +1,15 @@
-import { describe, it, beforeEach, afterEach } from "node:test";
+import { describe, it, beforeEach, afterEach, mock } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 
 import { NutritionStore } from "../src/store.js";
 import { SearchOrchestrator } from "../src/search.js";
 import { makeFoodItem, tmpDbPath } from "./helpers.js";
+
+/** Builds a fake `fetch` Response for the USDA search endpoint shape client.ts expects. */
+function fakeUsdaResponse(foods: unknown[]): { ok: boolean; status: number; json: () => Promise<unknown> } {
+  return { ok: true, status: 200, json: async () => ({ foods }) };
+}
 
 describe("SearchOrchestrator", () => {
   let store: NutritionStore;
@@ -129,6 +134,98 @@ describe("SearchOrchestrator", () => {
 
       const results = await orchestrator.search("Chicken", 0);
       assert.deepEqual(results, []);
+    });
+  });
+
+  describe("mass-conservation guard (#10) on the fresh-USDA cache-write path", () => {
+    let originalApiKey: string | undefined;
+
+    beforeEach(() => {
+      originalApiKey = process.env.USDA_API_KEY;
+      process.env.USDA_API_KEY = "test-key";
+    });
+
+    afterEach(() => {
+      mock.restoreAll();
+      if (originalApiKey === undefined) delete process.env.USDA_API_KEY;
+      else process.env.USDA_API_KEY = originalApiKey;
+    });
+
+    it("search() flags a corrupt fresh-USDA result but does not cache it (#10's explicit 'stop it entering' requirement)", async () => {
+      // usda_1838212-shaped: 4380 cal / 250g protein / 562g carbs / 138g fat per 100g, sum 950g.
+      mock.method(globalThis, "fetch", async () =>
+        fakeUsdaResponse([
+          {
+            fdcId: 1838212,
+            description: "Boost High Protein Nutritional Drink",
+            foodNutrients: [
+              { nutrientId: 1008, nutrientName: "Energy", value: 4380 },
+              { nutrientId: 1003, nutrientName: "Protein", value: 250 },
+              { nutrientId: 1004, nutrientName: "Total lipid (fat)", value: 138 },
+              { nutrientId: 1005, nutrientName: "Carbohydrate", value: 562 },
+            ],
+            servingSize: 11,
+            servingSizeUnit: "fl oz",
+          },
+        ])
+      );
+
+      const results = await orchestrator.search("boost shake", 5);
+      const found = results.find((r) => r.id === "usda_1838212");
+      assert.ok(found, "corrupt row must still be returned, not silently dropped");
+      assert.equal(found!.data_quality, "impossible_macros");
+      assert.equal(found!.basis, "per_100g");
+      assert.equal(found!.calories, 4380);
+
+      // The load-bearing assertion: it must NOT have been written to the cache.
+      assert.equal(store.lookup("usda_1838212"), null);
+    });
+
+    it("search() still caches a normal (non-corrupt) fresh-USDA result", async () => {
+      mock.method(globalThis, "fetch", async () =>
+        fakeUsdaResponse([
+          {
+            fdcId: 999,
+            description: "Plain Chicken Breast",
+            foodNutrients: [
+              { nutrientId: 1008, nutrientName: "Energy", value: 165 },
+              { nutrientId: 1003, nutrientName: "Protein", value: 31 },
+              { nutrientId: 1004, nutrientName: "Total lipid (fat)", value: 3.6 },
+              { nutrientId: 1005, nutrientName: "Carbohydrate", value: 0 },
+            ],
+          },
+        ])
+      );
+
+      const results = await orchestrator.search("plain chicken breast unique", 5);
+      const found = results.find((r) => r.id === "usda_999");
+      assert.ok(found);
+      assert.equal(found!.data_quality, null);
+      assert.ok(store.lookup("usda_999"), "non-corrupt rows must still be cached as before");
+    });
+
+    it("lookupBarcode() flags a corrupt fresh-USDA result but does not cache it", async () => {
+      mock.method(globalThis, "fetch", async () =>
+        fakeUsdaResponse([
+          {
+            fdcId: 1838212,
+            description: "Boost High Protein Nutritional Drink",
+            gtinUpc: "0123456789012",
+            foodNutrients: [
+              { nutrientId: 1008, nutrientName: "Energy", value: 4380 },
+              { nutrientId: 1003, nutrientName: "Protein", value: 250 },
+              { nutrientId: 1004, nutrientName: "Total lipid (fat)", value: 138 },
+              { nutrientId: 1005, nutrientName: "Carbohydrate", value: 562 },
+            ],
+          },
+        ])
+      );
+
+      const result = await orchestrator.lookupBarcode("0123456789012");
+      assert.ok(result);
+      assert.equal(result!.data_quality, "impossible_macros");
+      assert.equal(result!.basis, "per_100g");
+      assert.equal(store.lookup("usda_1838212"), null);
     });
   });
 });
