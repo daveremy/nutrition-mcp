@@ -1,4 +1,5 @@
 import type {
+  DataQuality,
   FoodResponse,
   MacroField,
   RawFoodRow,
@@ -6,7 +7,7 @@ import type {
   SearchResult,
   WeightSource,
 } from "./types.js";
-import { MACRO_FIELDS } from "./types.js";
+import { IMPOSSIBLE_MACROS, MACRO_FIELDS } from "./types.js";
 import { parseServingWeight, isDensitySensitiveFood } from "./serving-parse.js";
 import { roundTo } from "./utils.js";
 
@@ -16,6 +17,49 @@ const ROUND_INT_FIELDS: ReadonlySet<MacroField> = new Set(["calories", "sodium"]
 
 function roundField(field: MacroField, value: number): number {
   return roundTo(value, ROUND_INT_FIELDS.has(field) ? 0 : 1);
+}
+
+/**
+ * Mass-conservation guard (#10): protein + carbs + fat cannot physically exceed 100g inside
+ * 100g of food — the parts cannot outweigh the whole. This needs no domain knowledge (unlike
+ * a calorie-ceiling check, which would need to know whether 900 cal/100g is plausible — chia
+ * oil legitimately reads 992) and has no false positives: it's arithmetic, not nutrition.
+ *
+ * Strict `>`, no epsilon: a row summing to exactly 100 is physically valid (pure macro, zero
+ * water/ash/fiber-that's-not-carbs) and must not be flagged; 100.1 is impossible and must be.
+ */
+export const MASS_CONSERVATION_LIMIT_G = 100;
+
+/**
+ * Sum of protein+carbs+fat per 100g, treating a missing field as 0 for summing purposes (a
+ * row can be corrupt even with one macro unset — e.g. protein+carbs alone already exceeding
+ * 100g doesn't get "less corrupt" because fat wasn't recorded). Returns null only when all
+ * three are null — nothing to sum, so nothing to judge.
+ */
+export function computeMacroMassSum(
+  protein: number | null | undefined,
+  carbs: number | null | undefined,
+  fat: number | null | undefined
+): number | null {
+  if (protein == null && carbs == null && fat == null) return null;
+  return (protein ?? 0) + (carbs ?? 0) + (fat ?? 0);
+}
+
+// Single source of truth for the ">100" comparison (refine pass, code reuse/quality review):
+// both the public hasImpossibleMacros() and computeBasis() below — which also needs the raw
+// sum for macro_mass_g, not just the boolean — go through this rather than each re-writing
+// the threshold check.
+function exceedsMassLimit(sum: number | null): boolean {
+  return sum != null && sum > MASS_CONSERVATION_LIMIT_G;
+}
+
+/** True when a row's stored per-100g macros are physically impossible (see above). */
+export function hasImpossibleMacros(
+  protein: number | null | undefined,
+  carbs: number | null | undefined,
+  fat: number | null | undefined
+): boolean {
+  return exceedsMassLimit(computeMacroMassSum(protein, carbs, fat));
 }
 
 function parseVerifiedFields(raw: string | null | undefined): string[] | null {
@@ -65,6 +109,8 @@ interface BasisFields {
   is_correction: boolean;
   verified_fields: string[] | null;
   superseded_by: string | null;
+  data_quality: DataQuality;
+  macro_mass_g: number | null;
 }
 
 /**
@@ -105,13 +151,34 @@ function resolveWeight(
  *
  * Only macro fields present (not undefined) on `row` are scaled/returned, so a lean row shape
  * (e.g. search's 4-macro SELECT) doesn't grow fields it never selected.
+ *
+ * Mass-conservation guard (#10): when a row's stored macros are physically impossible
+ * (protein+carbs+fat > 100g per 100g of food), the row is never served as usable nutrition
+ * data — not scaled to a per-serving number (scaling faithfully amplifies the corruption;
+ * this is precisely how the 4,380 cal/100g Boost row became a 10,512 cal "per serving"
+ * response), and not returned via the headline `calories`/`protein`/`fat`/`carbs`/etc. fields
+ * either (code review round 1, codex P1: the issue's proposed fix says "never serve a
+ * physically impossible row," not merely "never scale" it — a caller reading `calories`
+ * without first checking `data_quality` must not get a number at all). The row itself is
+ * still returned — never silently dropped, so a caller told the row is corrupt can act on
+ * that rather than falling back to something worse — forced to `basis: "per_100g"` and
+ * flagged via `data_quality`/`macro_mass_g`. `per_100g` still carries the raw stored values
+ * (not nulled) so a caller who explicitly wants to see *why* the row is corrupt still can —
+ * "suppress and say so," not "delete and say nothing."
  */
-
 function computeBasis(
   row: BasisInput & Partial<Record<MacroField, number | null>>
 ): { fields: BasisFields; scaled: Partial<Record<MacroField, number | null>> } {
   const { weight, weight_source } = resolveWeight(row.serving_weight_g, row.serving_size, row.name);
-  const hasWeight = weight != null;
+
+  const macroMassSum = computeMacroMassSum(row.protein ?? null, row.carbs ?? null, row.fat ?? null);
+  const impossibleMacros = exceedsMassLimit(macroMassSum);
+
+  // Corrupt rows never scale, no matter what weight would otherwise have resolved — and never
+  // claim a weight_source, since we are declining to use the resolved weight, not asserting
+  // none existed (keeps the existing invariant "basis per_100g => weight_source null" honest).
+  const hasWeight = weight != null && !impossibleMacros;
+  const effectiveWeightSource = impossibleMacros ? null : weight_source;
 
   const per100g: Partial<Record<MacroField, number | null>> = {};
   const scaled: Partial<Record<MacroField, number | null>> = {};
@@ -120,7 +187,11 @@ function computeBasis(
     if (!(field in row)) continue;
     const stored = row[field] ?? null;
     per100g[field] = stored;
-    if (stored == null) {
+    // Impossible-macro rows never populate the headline fields at all, not even unscaled —
+    // the whole row is untrustworthy once mass conservation fails, not just the three fields
+    // the check itself reads (calories/fiber/sugar/sodium are just as suspect on a row whose
+    // protein+carbs+fat already can't be true).
+    if (stored == null || impossibleMacros) {
       scaled[field] = null;
       continue;
     }
@@ -132,8 +203,13 @@ function computeBasis(
     fields: {
       basis: hasWeight ? "per_serving" : "per_100g",
       basis_weight_g: hasWeight ? (weight as number) : null,
-      weight_source,
+      weight_source: effectiveWeightSource,
       per_100g: per100g,
+      data_quality: impossibleMacros ? IMPOSSIBLE_MACROS : null,
+      // Unrounded deliberately: rounding could print e.g. 100.0 for a rejected 100.04 sum,
+      // contradicting the strict >100 boundary to callers. Diagnostic field, not a display
+      // macro — precision over prettiness.
+      macro_mass_g: impossibleMacros ? macroMassSum : null,
       atwater_delta_pct: computeAtwaterDeltaPct(
         row.calories ?? null,
         row.protein ?? null,

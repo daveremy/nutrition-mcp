@@ -88,7 +88,8 @@ Returns an array of results, each shaped like:
   "weight_source": "column",                                     // "column" | "parsed_grams" | "parsed_mass" | "parsed_volume"
   "per_100g": { "calories": 429, "protein": 25.7, "fat": 17.1, "carbs": 31.4 },
   "atwater_delta_pct": 0.2, "is_correction": false,
-  "verified_fields": null, "superseded_by": null
+  "verified_fields": null, "superseded_by": null,
+  "data_quality": null, "macro_mass_g": null
 }
 ```
 
@@ -105,6 +106,12 @@ does `basis` fall back to `"per_100g"`, with the headline values being the canon
 numbers — never silently mislabeled as a serving. `per_100g` is
 always present regardless of basis. See docs/CALLER-GUIDE.md for how to use `basis`,
 `weight_source`, `atwater_delta_pct`, `is_correction`, and `superseded_by`.
+
+Every result is also checked for **mass conservation**: if `protein + carbs + fat` (per 100g)
+exceeds 100g, the row is physically impossible and `data_quality` is `"impossible_macros"` —
+in that case `calories`/`protein`/`fat`/`carbs`/`fiber`/`sugar`/`sodium` are all returned
+`null` (never a corrupt or scaled-up number) and `macro_mass_g` reports the impossible sum;
+`per_100g` still carries the raw stored values for reference. See docs/CALLER-GUIDE.md.
 
 #### `nutrition_lookup`
 

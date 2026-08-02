@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.4.3
+
+**P0 fix:** `nutrition_search`/`nutrition_lookup`/`nutrition_barcode`/`nutrition_cache_list`
+were returning `calories: 10512, protein: 600` for a food whose real label read 35g protein —
+0.4.2's serving-scaling fix faithfully amplified a corrupt source row (protein+carbs+fat
+summing to 950g inside 100g of food, physically impossible) instead of catching it. See #10.
+
+- Fix: new mass-conservation guard — any row where `protein + carbs + fat > 100` (per 100g) is
+  flagged `data_quality: "impossible_macros"` on every read surface, and its headline
+  `calories`/`protein`/`fat`/`carbs`/`fiber`/`sugar`/`sodium` fields are returned `null` rather
+  than a corrupt (and possibly serving-scaled) number. `macro_mass_g` reports the impossible
+  sum; `per_100g` still carries the raw stored values, unflagged, for reference. Applied at the
+  shared scaling helper (covers all four read tools), the USDA cache-write boundary (a corrupt
+  USDA row is never persisted), and the local dataset seed (a corrupt row is never imported).
+  See docs/CALLER-GUIDE.md for how to use `data_quality`/`macro_mass_g`.
+- Fix: the CLI `search` command was a fifth, unscaled read surface — it printed per-100g values
+  under a bare `Cal` header with no basis indication at all, discarding the safety signal every
+  MCP tool already carries. The header now reflects the basis (`Cal/100g` vs `Cal`), a
+  mixed-basis result set prints as two clearly labeled groups, and a corrupt
+  (`impossible_macros`) row is visibly marked with a `⚠` in its name. See #9.
+
 ## 0.4.1
 
 - Fix: `serving_weight_g` is now derived from `serving_size` when the column is NULL

@@ -3,6 +3,7 @@ import { Command } from "commander";
 
 import { NutritionStore } from "./store.js";
 import { SearchOrchestrator } from "./search.js";
+import { formatSearchTable } from "./cli-format.js";
 import { VERSION } from "./version.js";
 
 const program = new Command();
@@ -26,34 +27,7 @@ program
     const orchestrator = new SearchOrchestrator(store);
     const results = await orchestrator.search(query, Math.min(limit, 50));
 
-    if (results.length === 0) {
-      console.log("No results found.");
-      store.close();
-      return;
-    }
-
-    // Print as table
-    console.log(
-      "Name".padEnd(40) +
-        "Cal".padStart(6) +
-        "Pro".padStart(6) +
-        "Fat".padStart(6) +
-        "Carb".padStart(6) +
-        "  Tier"
-    );
-    console.log("-".repeat(70));
-    for (const r of results) {
-      const name = (r.brand ? `${r.name} (${r.brand})` : r.name).slice(0, 39);
-      console.log(
-        name.padEnd(40) +
-          fmt(r.calories).padStart(6) +
-          fmt(r.protein).padStart(6) +
-          fmt(r.fat).padStart(6) +
-          fmt(r.carbs).padStart(6) +
-          `  ${r.source_tier}`
-      );
-    }
-
+    console.log(formatSearchTable(results));
     store.close();
   });
 
@@ -72,9 +46,5 @@ program
     const { startServer } = await import("./mcp.js");
     await startServer();
   });
-
-function fmt(n: number | null | undefined): string {
-  return n != null ? n.toFixed(1) : "-";
-}
 
 program.parseAsync();

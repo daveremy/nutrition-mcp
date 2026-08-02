@@ -1,7 +1,14 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 
-import { toFoodResponse, toSearchResponse, resolveOverrideInput } from "../src/scaling.js";
+import {
+  toFoodResponse,
+  toSearchResponse,
+  resolveOverrideInput,
+  computeMacroMassSum,
+  hasImpossibleMacros,
+  MASS_CONSERVATION_LIMIT_G,
+} from "../src/scaling.js";
 import { MACRO_FIELDS } from "../src/types.js";
 import type { RawFoodRow, SearchResult } from "../src/types.js";
 import { makeFoodItem } from "./helpers.js";
@@ -273,6 +280,11 @@ describe("scaling — the bug this issue fixes", () => {
         name: "Organic Extra Virgin Olive Oil by Bertolli",
         calories: 800,
         fat: 93.3,
+        // Pure olive oil is ~0g protein/carbs — explicit, not the fixture default (10/15),
+        // which would otherwise sum to 118.3g and trip the mass-conservation guard (#10) on a
+        // row that's legitimately fine; this is a real-world value, not a guard workaround.
+        protein: 0,
+        carbs: 0,
         serving_weight_g: null,
         serving_size: "1 tbsp",
       });
@@ -414,6 +426,182 @@ describe("scaling — the bug this issue fixes", () => {
         toFoodResponse(rawRow({ superseded_by: "web_correction123" })).superseded_by,
         "web_correction123"
       );
+    });
+  });
+
+  describe("mass-conservation guard (#10) — protein+carbs+fat cannot exceed 100g per 100g", () => {
+    describe("computeMacroMassSum / hasImpossibleMacros — the shared primitive", () => {
+      it("sums present fields, treating missing ones as 0", () => {
+        assert.equal(computeMacroMassSum(10, 20, 5), 35);
+        assert.equal(computeMacroMassSum(60, null, null), 60);
+        assert.equal(computeMacroMassSum(null, null, null), null);
+      });
+
+      it("flags strictly greater than 100, never exactly 100 (the issue's stated boundary)", () => {
+        assert.equal(hasImpossibleMacros(50, 30, MASS_CONSERVATION_LIMIT_G - 80), false); // = 100
+        assert.equal(hasImpossibleMacros(50, 30, MASS_CONSERVATION_LIMIT_G - 79.9), true); // = 100.1
+      });
+
+      it("a row corrupt on two fields alone (third null) is still flagged", () => {
+        // protein+carbs already 120 with fat unset — missing data can't make it less corrupt.
+        assert.equal(hasImpossibleMacros(70, 50, null), true);
+      });
+    });
+
+    describe("usda_1838212 regression fixture — the Boost shake that caused the P0", () => {
+      it("never returns 10512 (or any scaled amplification) on toFoodResponse", () => {
+        // Real stored values from the live DB: 4380 cal / 250g protein / 562g carbs / 138g fat
+        // per 100g (sum = 950g, physically impossible), serving_weight_g NULL, a volumetric
+        // serving_size (the carton reads in fl oz) that would otherwise derive a ~240g weight
+        // and scale this row 43x into the reported 10,512 cal bug.
+        const row = rawRow({
+          id: "usda_1838212",
+          name: "Boost High Protein Nutritional Drink",
+          source_tier: "usda",
+          calories: 4380,
+          protein: 250,
+          carbs: 562,
+          fat: 138,
+          serving_weight_g: null,
+          serving_size: "11 fl oz",
+        });
+        const response = toFoodResponse(row);
+        assert.equal(response.data_quality, "impossible_macros");
+        assert.equal(response.macro_mass_g, 950);
+        // Never scaled — basis forced to per_100g regardless of the resolvable volumetric weight.
+        assert.equal(response.basis, "per_100g");
+        assert.equal(response.basis_weight_g, null);
+        assert.equal(response.weight_source, null);
+        // Never served at all (code review round 1, codex P1): the headline fields are null,
+        // not the raw-but-unscaled 4,380 — a caller reading `calories` without checking
+        // `data_quality` first must get nothing, not a still-absurd number.
+        assert.equal(response.calories, null);
+        assert.notEqual(response.calories, 10512);
+        assert.equal(response.protein, null);
+        // The raw stored values are still visible via per_100g — "suppress and say so," not
+        // "delete and say nothing." A caller who explicitly wants to see why can still look.
+        assert.equal(response.per_100g.calories, 4380);
+        assert.equal(response.per_100g.protein, 250);
+      });
+
+      it("also flagged via the lean toSearchResponse shape (search/listCached surfaces)", () => {
+        const row: SearchResult = {
+          id: "usda_1838212",
+          name: "Boost High Protein Nutritional Drink",
+          brand: null,
+          calories: 4380,
+          protein: 250,
+          fat: 138,
+          carbs: 562,
+          serving_size: "11 fl oz",
+          serving_weight_g: null,
+          source_tier: "usda",
+          is_correction: 0,
+          verified_fields: null,
+          superseded_by: null,
+        };
+        const response = toSearchResponse(row);
+        assert.equal(response.data_quality, "impossible_macros");
+        assert.equal(response.basis, "per_100g");
+        assert.equal(response.calories, null);
+        assert.equal(response.per_100g.calories, 4380);
+      });
+    });
+
+    describe("boundary — exactly 100 is allowed, 100.1 is rejected", () => {
+      it("sum of exactly 100 is not flagged and scales normally", () => {
+        const row = rawRow({ protein: 40, carbs: 40, fat: 20, calories: 400, serving_weight_g: 100 });
+        const response = toFoodResponse(row);
+        assert.equal(response.data_quality, null);
+        assert.equal(response.macro_mass_g, null);
+        assert.equal(response.basis, "per_serving");
+      });
+
+      it("sum of 100.1 is flagged", () => {
+        const row = rawRow({ protein: 40, carbs: 40, fat: 20.1, calories: 400 });
+        const response = toFoodResponse(row);
+        assert.equal(response.data_quality, "impossible_macros");
+        assert.equal(response.macro_mass_g, 100.1);
+      });
+    });
+
+    describe("unrounded macro_mass_g — precision over prettiness (plan review round 1)", () => {
+      it("reports the exact sum even when it wouldn't survive 1-decimal rounding as > 100", () => {
+        const row = rawRow({ protein: 33.35, carbs: 33.35, fat: 33.34 }); // = 100.04
+        const response = toFoodResponse(row);
+        assert.equal(response.data_quality, "impossible_macros");
+        assert.equal(response.macro_mass_g, 100.04);
+      });
+    });
+
+    describe("never scales a corrupt row, no matter what weight would otherwise resolve", () => {
+      it("column weight is ignored", () => {
+        const row = rawRow({ protein: 250, carbs: 562, fat: 138, calories: 4380, serving_weight_g: 240 });
+        const response = toFoodResponse(row);
+        assert.equal(response.basis, "per_100g");
+        assert.equal(response.calories, null);
+        assert.equal(response.per_100g.calories, 4380);
+      });
+
+      it("derived (parsed_volume) weight is ignored — this is the exact P0 shape", () => {
+        const row = rawRow({
+          protein: 250,
+          carbs: 562,
+          fat: 138,
+          calories: 4380,
+          serving_weight_g: null,
+          serving_size: "1 cup",
+        });
+        const response = toFoodResponse(row);
+        assert.equal(response.basis, "per_100g");
+        assert.equal(response.weight_source, null);
+      });
+    });
+
+    describe("property: any impossible-macro row, at any weight, never scales", () => {
+      it("holds across a range of corrupt sums and resolvable weights", () => {
+        const corruptCombos: Array<[number, number, number]> = [
+          [101, 0, 0],
+          [50, 50, 0.1],
+          [300, 400, 250],
+          [33.4, 33.3, 33.4], // = 100.1
+        ];
+        const weights = [null, 28, 100, 240, 500];
+        for (const [protein, carbs, fat] of corruptCombos) {
+          for (const weight of weights) {
+            const row = rawRow({
+              protein,
+              carbs,
+              fat,
+              calories: 1000,
+              serving_weight_g: weight,
+              serving_size: weight == null ? "1 cup" : "1 serving",
+            });
+            const response = toFoodResponse(row);
+            assert.equal(response.data_quality, "impossible_macros", JSON.stringify({ protein, carbs, fat, weight }));
+            assert.equal(response.basis, "per_100g", JSON.stringify({ protein, carbs, fat, weight }));
+            assert.equal(response.basis_weight_g, null);
+            assert.equal(response.calories, null, "never served, not even unscaled");
+            assert.equal(response.per_100g.calories, 1000, "raw value still visible via per_100g");
+          }
+        }
+      });
+    });
+
+    describe("existing physical-label fixtures are unaffected (no false positives)", () => {
+      it("all five fixtures remain unflagged — none are anywhere near the 100g mass limit", () => {
+        const fixtures = [
+          { calories: 476, protein: 9.5, fat: 19, carbs: 66.7 }, // Nature Valley
+          { calories: 4, protein: 0.4, fat: null, carbs: null }, // Pacific broth
+          { calories: 535.7, protein: 7.14, fat: null, carbs: null }, // TJ chips
+          { calories: 800, protein: null, fat: 93.3, carbs: null }, // Bertolli
+          { calories: 76, protein: 8.24, fat: null, carbs: null }, // Chobani
+        ];
+        for (const f of fixtures) {
+          const response = toFoodResponse(rawRow(f));
+          assert.equal(response.data_quality, null, JSON.stringify(f));
+        }
+      });
     });
   });
 });

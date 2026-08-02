@@ -21,6 +21,7 @@ Analyze nutritional content of foods using the nutrition-mcp tools.
    > Note: USDA API key is not configured — results are local-only. Get a free key at https://fdc.nal.usda.gov/api-key-signup and add `USDA_API_KEY=your_key` to `.env` for broader coverage.
 
 4. **Present results** in a table showing name, brand, and macros (calories, protein, fat, carbs) — these are scaled to the food's serving when `basis: "per_serving"`; if `basis: "per_100g"` instead, say so explicitly rather than presenting the numbers as a serving amount (the serving weight isn't known for this food). Include fiber/sugar/sodium when available. Note the source (local, USDA, or cached) and flag it if `is_correction` is true or `superseded_by` is set — see `docs/CALLER-GUIDE.md` for the full trust-signal reference.
+   - **If `data_quality` is `"impossible_macros"`**: the row is physically corrupt (protein+carbs+fat exceed 100g per 100g of food) and `calories`/`protein`/`fat`/`carbs`/etc. are all `null` — there is nothing to present as a number. Tell the user this specific database entry is corrupt (you can mention `macro_mass_g` as the impossible sum if useful context) and web search for the food's real nutrition information instead, the same as step 6 below for missing/poor results.
 
 5. **If the user wants details** on a specific result, look up the full record by ID.
 
@@ -58,6 +59,9 @@ Analyze nutritional content of foods using the nutrition-mcp tools.
 - Values are scaled to the food's serving when `basis: "per_serving"`; check `basis` on every
   result rather than assuming — it's `"per_100g"` (unscaled) when the serving weight isn't known
   for that food. See `docs/CALLER-GUIDE.md` for the full reference on `basis`, `atwater_delta_pct`,
-  `is_correction`, `verified_fields`, and `superseded_by`.
+  `is_correction`, `verified_fields`, `superseded_by`, and `data_quality`.
+- Never present a `data_quality: "impossible_macros"` row's null macro fields as if they were
+  zero or unknown-but-fine — they're null because the row is corrupt, not because the food has
+  no calories. Always web search for a replacement instead.
 - The local database must be seeded on first use via `nutrition_seed` (~3 min, runs in background)
 - When a food isn't in the local DB or USDA, always web search for accurate data and cache it with `nutrition_cache_add` — do not rely on training data for nutrition values

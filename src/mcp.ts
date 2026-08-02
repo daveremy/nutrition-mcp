@@ -43,7 +43,7 @@ const server = new McpServer({
 
 server.tool(
   "nutrition_search",
-  "Search for foods by name. Returns matching foods with macros (calories, protein, fat, carbs) scaled to the food's serving — check the `basis` field (\"per_serving\" vs \"per_100g\") on every result, it is never implied. `weight_source` (\"column\" | \"parsed_grams\" | \"parsed_mass\" | \"parsed_volume\") tells you whether the serving weight was stated or derived; `parsed_volume` assumes water-like density, so treat it more cautiously than the other three (oils/honey/syrup are excluded from it entirely and stay `per_100g` instead). `per_100g` on each result carries the canonical values regardless of basis. `is_correction`/`superseded_by`/`verified_fields` signal trust; see docs/CALLER-GUIDE.md. Searches local database first, then USDA API.",
+  "Search for foods by name. Returns matching foods with macros (calories, protein, fat, carbs) scaled to the food's serving — check the `basis` field (\"per_serving\" vs \"per_100g\") on every result, it is never implied. `weight_source` (\"column\" | \"parsed_grams\" | \"parsed_mass\" | \"parsed_volume\") tells you whether the serving weight was stated or derived; `parsed_volume` assumes water-like density, so treat it more cautiously than the other three (oils/honey/syrup are excluded from it entirely and stay `per_100g` instead). `per_100g` on each result carries the canonical values regardless of basis. If `data_quality` is \"impossible_macros\" (protein+carbs+fat exceed 100g per 100g of food — physically impossible), the row is corrupt: calories/protein/fat/carbs are all null (nothing to accidentally log), `macro_mass_g` shows the impossible sum, `per_100g` still has the raw stored values for reference, web-search or ask the user instead. `is_correction`/`superseded_by`/`verified_fields` signal trust; see docs/CALLER-GUIDE.md. Searches local database first, then USDA API.",
   {
     query: z.string().describe("Food name to search for"),
     limit: z.number().min(1).max(50).default(10).describe("Max results to return"),
@@ -63,7 +63,7 @@ server.tool(
 
 server.tool(
   "nutrition_lookup",
-  "Look up a specific food by ID. Returns complete nutrition data scaled to the serving (check `basis`/`basis_weight_g`/`weight_source`; `per_100g` always has the canonical values too). If `superseded_by` is non-null, a correction exists for this exact id and its id should be looked up instead. See docs/CALLER-GUIDE.md for how to use these signals.",
+  "Look up a specific food by ID. Returns complete nutrition data scaled to the serving (check `basis`/`basis_weight_g`/`weight_source`; `per_100g` always has the canonical values too). If `data_quality` is \"impossible_macros\" (protein+carbs+fat exceed 100g per 100g of food), the row is corrupt — calories/protein/fat/carbs are all null, `per_100g` still has the raw values for reference; web-search or ask the user instead. If `superseded_by` is non-null, a correction exists for this exact id and its id should be looked up instead. See docs/CALLER-GUIDE.md for how to use these signals.",
   {
     id: z.string().describe("Food ID (e.g. on_abc123, usda_12345)"),
   },
@@ -85,7 +85,7 @@ server.tool(
 
 server.tool(
   "nutrition_barcode",
-  "Look up a food by barcode (UPC-A 12-digit or EAN-13). Returns data scaled to the serving (check `basis`/`basis_weight_g`/`weight_source`; `per_100g` always has the canonical values too) and, if a correction exists for this barcode, returns the correction rather than the original. Searches local database first, then USDA API.",
+  "Look up a food by barcode (UPC-A 12-digit or EAN-13). Returns data scaled to the serving (check `basis`/`basis_weight_g`/`weight_source`; `per_100g` always has the canonical values too) and, if a correction exists for this barcode, returns the correction rather than the original. If `data_quality` is \"impossible_macros\", the row is corrupt — calories/protein/fat/carbs are all null, web-search or ask the user instead. Searches local database first, then USDA API.",
   {
     barcode: z.string().describe("Barcode (12 or 13 digits)"),
   },
@@ -275,7 +275,7 @@ server.tool(
 
 server.tool(
   "nutrition_cache_list",
-  "List cached food entries (USDA and web-sourced). Shows what has been cached from API lookups, web searches, and manual additions. Values are scaled per `basis` like other read tools; corrections (`is_correction: true`) are listed ahead of the rows they correct. Does not include the local OpenNutrition dataset.",
+  "List cached food entries (USDA and web-sourced). Shows what has been cached from API lookups, web searches, and manual additions. Values are scaled per `basis` like other read tools; corrections (`is_correction: true`) are listed ahead of the rows they correct. A row with `data_quality: \"impossible_macros\"` is corrupt (protein+carbs+fat exceed 100g per 100g) — calories/protein/fat/carbs are all null on these rows. Does not include the local OpenNutrition dataset.",
   {
     tier: z.enum(["usda", "web", "all"]).default("all").describe("Filter by source tier"),
     limit: z.number().min(1).max(100).default(20).describe("Page size"),
