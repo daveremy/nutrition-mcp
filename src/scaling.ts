@@ -153,13 +153,18 @@ function resolveWeight(
  * (e.g. search's 4-macro SELECT) doesn't grow fields it never selected.
  *
  * Mass-conservation guard (#10): when a row's stored macros are physically impossible
- * (protein+carbs+fat > 100g per 100g of food), it is never scaled to a per-serving number —
- * scaling faithfully amplifies the corruption (this is precisely how the 4,380 cal/100g Boost
- * row became a 10,512 cal "per serving" response). The row is still returned (never silently
- * dropped — a caller told the row is corrupt can act on that; one given nothing may fall back
- * to something worse), forced to `basis: "per_100g"` regardless of what weight was resolvable,
- * and flagged via `data_quality`/`macro_mass_g` so a careless caller sees the flag before the
- * number.
+ * (protein+carbs+fat > 100g per 100g of food), the row is never served as usable nutrition
+ * data — not scaled to a per-serving number (scaling faithfully amplifies the corruption;
+ * this is precisely how the 4,380 cal/100g Boost row became a 10,512 cal "per serving"
+ * response), and not returned via the headline `calories`/`protein`/`fat`/`carbs`/etc. fields
+ * either (code review round 1, codex P1: the issue's proposed fix says "never serve a
+ * physically impossible row," not merely "never scale" it — a caller reading `calories`
+ * without first checking `data_quality` must not get a number at all). The row itself is
+ * still returned — never silently dropped, so a caller told the row is corrupt can act on
+ * that rather than falling back to something worse — forced to `basis: "per_100g"` and
+ * flagged via `data_quality`/`macro_mass_g`. `per_100g` still carries the raw stored values
+ * (not nulled) so a caller who explicitly wants to see *why* the row is corrupt still can —
+ * "suppress and say so," not "delete and say nothing."
  */
 function computeBasis(
   row: BasisInput & Partial<Record<MacroField, number | null>>
@@ -182,7 +187,11 @@ function computeBasis(
     if (!(field in row)) continue;
     const stored = row[field] ?? null;
     per100g[field] = stored;
-    if (stored == null) {
+    // Impossible-macro rows never populate the headline fields at all, not even unscaled —
+    // the whole row is untrustworthy once mass conservation fails, not just the three fields
+    // the check itself reads (calories/fiber/sugar/sodium are just as suspect on a row whose
+    // protein+carbs+fat already can't be true).
+    if (stored == null || impossibleMacros) {
       scaled[field] = null;
       continue;
     }

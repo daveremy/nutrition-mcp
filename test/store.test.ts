@@ -640,13 +640,15 @@ describe("NutritionStore", () => {
       );
     }
 
-    it("lookup flags the row and never scales it", () => {
+    it("lookup flags the row and never scales it, and never serves it via the headline fields", () => {
       seedCorruptRow("usda_corrupt_lookup");
       const result = store.lookup("usda_corrupt_lookup");
       assert.ok(result);
       assert.equal(result.data_quality, "impossible_macros");
       assert.equal(result.basis, "per_100g");
-      assert.equal(result.calories, 4380);
+      assert.equal(result.calories, null);
+      // Still visible via per_100g — "suppress and say so," not "delete and say nothing."
+      assert.equal(result.per_100g.calories, 4380);
     });
 
     it("lookupByBarcode flags the row", () => {

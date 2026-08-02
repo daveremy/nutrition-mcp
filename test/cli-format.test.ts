@@ -70,7 +70,7 @@ describe("formatSearchTable — CLI presentation layer (#9)", () => {
     assert.match(table, /(?<!\/100g)\bCal\b/);
   });
 
-  it("marks a corrupt (impossible_macros) row visibly in the name column", () => {
+  it("marks a corrupt (impossible_macros) row visibly in the name column, with null headline macros", () => {
     const table = formatSearchTable([
       searchResponse({
         id: "usda_1838212",
@@ -80,15 +80,20 @@ describe("formatSearchTable — CLI presentation layer (#9)", () => {
         weight_source: null,
         data_quality: "impossible_macros",
         macro_mass_g: 950,
-        calories: 4380,
-        protein: 250,
-        fat: 138,
-        carbs: 562,
+        // Matches what the server actually emits for a flagged row (code review round 1,
+        // codex P1): headline macros are null, not the raw-but-unscaled 4380/250/138/562.
+        calories: null,
+        protein: null,
+        fat: null,
+        carbs: null,
+        per_100g: { calories: 4380, protein: 250, fat: 138, carbs: 562 },
       }),
     ]);
     assert.match(table, /⚠.*Boost High Protein Nutritional Drink/);
-    // And it must never show the pre-guard amplified value.
+    // And it must never show the pre-guard amplified value, nor the raw unscaled one — the
+    // CLI's own row renders "-" for a row with no headline numbers to show.
     assert.doesNotMatch(table, /10512/);
+    assert.doesNotMatch(table, /4380/);
   });
 
   it("does not mark a non-corrupt row", () => {

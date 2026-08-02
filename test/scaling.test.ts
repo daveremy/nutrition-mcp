@@ -280,6 +280,11 @@ describe("scaling — the bug this issue fixes", () => {
         name: "Organic Extra Virgin Olive Oil by Bertolli",
         calories: 800,
         fat: 93.3,
+        // Pure olive oil is ~0g protein/carbs — explicit, not the fixture default (10/15),
+        // which would otherwise sum to 118.3g and trip the mass-conservation guard (#10) on a
+        // row that's legitimately fine; this is a real-world value, not a guard workaround.
+        protein: 0,
+        carbs: 0,
         serving_weight_g: null,
         serving_size: "1 tbsp",
       });
@@ -467,11 +472,16 @@ describe("scaling — the bug this issue fixes", () => {
         assert.equal(response.basis, "per_100g");
         assert.equal(response.basis_weight_g, null);
         assert.equal(response.weight_source, null);
-        // The headline value is the raw (still absurd, but non-amplified) per-100g number —
-        // never the 10,512 the P0 shipped, and never silently omitted either.
-        assert.equal(response.calories, 4380);
+        // Never served at all (code review round 1, codex P1): the headline fields are null,
+        // not the raw-but-unscaled 4,380 — a caller reading `calories` without checking
+        // `data_quality` first must get nothing, not a still-absurd number.
+        assert.equal(response.calories, null);
         assert.notEqual(response.calories, 10512);
-        assert.equal(response.protein, 250);
+        assert.equal(response.protein, null);
+        // The raw stored values are still visible via per_100g — "suppress and say so," not
+        // "delete and say nothing." A caller who explicitly wants to see why can still look.
+        assert.equal(response.per_100g.calories, 4380);
+        assert.equal(response.per_100g.protein, 250);
       });
 
       it("also flagged via the lean toSearchResponse shape (search/listCached surfaces)", () => {
@@ -493,7 +503,8 @@ describe("scaling — the bug this issue fixes", () => {
         const response = toSearchResponse(row);
         assert.equal(response.data_quality, "impossible_macros");
         assert.equal(response.basis, "per_100g");
-        assert.equal(response.calories, 4380);
+        assert.equal(response.calories, null);
+        assert.equal(response.per_100g.calories, 4380);
       });
     });
 
@@ -528,7 +539,8 @@ describe("scaling — the bug this issue fixes", () => {
         const row = rawRow({ protein: 250, carbs: 562, fat: 138, calories: 4380, serving_weight_g: 240 });
         const response = toFoodResponse(row);
         assert.equal(response.basis, "per_100g");
-        assert.equal(response.calories, 4380);
+        assert.equal(response.calories, null);
+        assert.equal(response.per_100g.calories, 4380);
       });
 
       it("derived (parsed_volume) weight is ignored — this is the exact P0 shape", () => {
@@ -569,7 +581,8 @@ describe("scaling — the bug this issue fixes", () => {
             assert.equal(response.data_quality, "impossible_macros", JSON.stringify({ protein, carbs, fat, weight }));
             assert.equal(response.basis, "per_100g", JSON.stringify({ protein, carbs, fat, weight }));
             assert.equal(response.basis_weight_g, null);
-            assert.equal(response.calories, 1000, "never scaled away from the raw per-100g value");
+            assert.equal(response.calories, null, "never served, not even unscaled");
+            assert.equal(response.per_100g.calories, 1000, "raw value still visible via per_100g");
           }
         }
       });

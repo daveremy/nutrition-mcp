@@ -99,13 +99,18 @@ Every result is checked for mass conservation: `protein + carbs + fat` cannot ph
 (unlike a calorie ceiling, which would need to know whether e.g. 900 cal/100g is plausible — chia
 oil legitimately reads 992) and has no false positives: it's arithmetic, not nutrition.
 
-If `data_quality` is `"impossible_macros"`, the row's stored data is corrupt — **do not log any
-of its values.** `macro_mass_g` carries the impossible sum so you (or the user) can see exactly
-how far off it is. This is the one case stronger than `atwater_delta_pct`: Atwater only catches a
-row that's internally inconsistent with itself, and a row can pass Atwater cleanly while still
-being physically impossible (a corrupt row can be self-consistently wrong). Treat
-`impossible_macros` as a hard stop, not a hint — web-search the product or ask the user for the
-real numbers, the same as you would for an unresolvable serving weight.
+If `data_quality` is `"impossible_macros"`, the row's stored data is corrupt and **the headline
+`calories`/`protein`/`fat`/`carbs`/`fiber`/`sugar`/`sodium` fields are all `null`** — there's
+nothing to accidentally log even if you skip the `data_quality` check. `macro_mass_g` carries the
+impossible sum so you (or the user) can see exactly how far off it is. `per_100g` still carries the
+raw stored values, unflagged and un-nulled — suppression means the *headline* number is withheld,
+not that the underlying data disappears, so you can still surface "the database has 4,380 cal/100g
+for this and that's not possible" to a user if useful. This is the one case stronger than
+`atwater_delta_pct`: Atwater only catches a row that's internally inconsistent with itself, and a
+row can pass Atwater cleanly while still being physically impossible (a corrupt row can be
+self-consistently wrong). Treat `impossible_macros` as a hard stop, not a hint — web-search the
+product or ask the user for the real numbers, the same as you would for an unresolvable serving
+weight.
 
 A flagged row is never scaled to a per-serving number, even if a serving weight is otherwise
 resolvable — `basis` is forced to `"per_100g"` and `weight_source` to `null` on any row this check

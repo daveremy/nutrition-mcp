@@ -175,7 +175,9 @@ describe("SearchOrchestrator", () => {
       assert.ok(found, "corrupt row must still be returned, not silently dropped");
       assert.equal(found!.data_quality, "impossible_macros");
       assert.equal(found!.basis, "per_100g");
-      assert.equal(found!.calories, 4380);
+      // Never served via the headline field, not even unscaled — only per_100g carries the raw value.
+      assert.equal(found!.calories, null);
+      assert.equal(found!.per_100g.calories, 4380);
 
       // The load-bearing assertion: it must NOT have been written to the cache.
       assert.equal(store.lookup("usda_1838212"), null);
